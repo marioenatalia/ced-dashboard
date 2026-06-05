@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>FocusData · Monitor Pagamenti CED</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.6.0/tabler-icons.min.css"/>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --color-background-primary: #ffffff;
+      --color-background-secondary: #f7f7f5;
+      --color-border-tertiary: #e8e6df;
+      --color-border-secondary: #d4d2cb;
+      --color-text-secondary: #6b6967;
+      --color-text-primary: #1a1917;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --color-background-primary: #1e1e1e;
+        --color-background-secondary: #2a2a2a;
+        --color-border-tertiary: #3a3a3a;
+        --color-border-secondary: #4a4a4a;
+        --color-text-secondary: #a0a0a0;
+        --color-text-primary: #f0f0f0;
+      }
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: var(--color-background-secondary);
+      color: var(--color-text-primary);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    input, select, textarea, button {
+      font-family: inherit;
+    }
+    textarea { font-family: 'Segoe UI', system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+    /* LOGIN */
+    #login-screen {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; margin: -16px;
+      background: linear-gradient(135deg, #0f2744 0%, #185FA5 100%);
+    }
+    #login-box {
+      background: #1e1e1e; border-radius: 16px; padding: 40px 36px;
+      width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    #login-box h2 { margin: 0 0 6px; color: #E6F1FB; font-size: 20px; font-weight: 600; }
+    #login-box p  { margin: 0 0 28px; color: #85B7EB; font-size: 13px; }
+    #login-box label { display: block; font-size: 11px; color: #a0a0a0; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .5px; }
+    #login-box input {
+      width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #3a3a3a;
+      background: #2a2a2a; color: #f0f0f0; font-size: 14px; margin-bottom: 16px;
+      outline: none; transition: border-color .2s;
+    }
+    #login-box input:focus { border-color: #185FA5; }
+    #login-btn {
+      width: 100%; padding: 11px; background: #185FA5; color: white; border: none;
+      border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background .2s; margin-top: 4px;
+    }
+    #login-btn:hover { background: #1470c0; }
+    #login-error {
+      display: none; margin-top: 12px; padding: 8px 12px;
+      background: #3a1a1a; border-radius: 7px; color: #f08080; font-size: 12px; text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN SCREEN -->
+  <div id="login-screen">
+    <div id="login-box">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+        <div style="width:40px;height:40px;border-radius:10px;background:#185FA5;display:flex;align-items:center;justify-content:center">
+          <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="#E6F1FB" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 21h18M3 10h18M3 7l9-4 9 4M4 10v11M20 10v11M8 10v11M16 10v11M12 10v11"/></svg>
+        </div>
+        <div>
+          <h2>FocusData CED</h2>
+          <p style="margin:0">Monitor Pagamenti</p>
+        </div>
+      </div>
+      <label>Utente</label>
+      <input type="text" id="login-user" placeholder="mario@focusdata" autocomplete="username"/>
+      <label>Password</label>
+      <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password"/>
+      <button id="login-btn" onclick="doLogin()">Accedi</button>
+      <div id="login-error">❌ Credenziali non valide</div>
+    </div>
+  </div>
+
+  <div id="root" style="display:none"></div>
+
+  <script>
+    const USERS = { "mario@focusdata": "mario-2026" };
+
+    function doLogin() {
+      const u = document.getElementById("login-user").value.trim().toLowerCase();
+      const p = document.getElementById("login-pass").value;
+      if (USERS[u] && USERS[u] === p) {
+        sessionStorage.setItem("ced_auth", "1");
+        document.getElementById("login-screen").style.display = "none";
+        document.getElementById("root").style.display = "block";
+      } else {
+        document.getElementById("login-error").style.display = "block";
+        document.getElementById("login-pass").value = "";
+      }
+    }
+
+    // Invio con Enter
+    document.addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+
+    // Controlla se già autenticato
+    if (sessionStorage.getItem("ced_auth") === "1") {
+      document.getElementById("login-screen").style.display = "none";
+      document.getElementById("root").style.display = "block";
+    }
+  </script>
+
+  <script type="text/babel" data-type="module">
+    const { useState, useCallback, useRef, useEffect } = React;
+
+    const C = {
+      blue:"#185FA5", blueL:"#E6F1FB",
+      teal:"#0F6E56", tealL:"#E1F5EE",
+      amber:"#BA7517", amberL:"#FAEEDA",
+      red:"#A32D2D",  redL:"#FCEBEB",
+      green:"#3B6D11",greenL:"#EAF3DE",
+      gray:"#5F5E5A", grayL:"#F1EFE8",
+      coral:"#993C1D",coralL:"#FAECE7",
+      purple:"#534AB7",purpleL:"#EEEDFE",
+    };
+
+    const fmt  = n => new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(n||0);
+    const fmtD = d => { try { return new Date(d).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"}); } catch { return "—"; }};
+    const now  = () => new Date().toISOString();
+    const todayStr = () => new Date().toISOString().split("T")[0];
+
+    const STATUS = {
+      pagato:  { label:"Pagato",    bg:C.greenL, c:C.green,  icon:"ti-circle-check"   },
+      parziale:{ label:"Parziale",  bg:C.amberL, c:C.amber,  icon:"ti-clock-hour-4"   },
+      attesa:  { label:"In attesa", bg:C.blueL,  c:C.blue,   icon:"ti-hourglass"      },
+      scaduto: { label:"Scaduto",   bg:C.redL,   c:C.red,    icon:"ti-alert-triangle" },
+    };
+
+    const LS = {
+      get:  (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } },
+      set:  (k, v)  => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+      raw:  (k)     => localStorage.getItem(k) || "",
+      setRaw:(k,v)  => localStorage.setItem(k, v),
+    };
+
+    const SAMPLE = [
+      { id:"PRF-2025-001", client:"Alfa Trasporti Srl",    amount:4800,  paid:4800,  date:"2025-03-15", due:"2025-04-15", status:"pagato",  notes:[], payments:[{date:"2025-04-10",amount:4800,method:"bonifico"}], pdfPath:null, pdfBlob:null, syncedAt:null },
+      { id:"PRF-2025-002", client:"Beta Logistica Spa",    amount:12500, paid:6000,  date:"2025-03-20", due:"2025-04-20", status:"parziale",notes:[{text:"Cliente conferma saldo entro 30/05",author:"Staff",scanned:true}], payments:[{date:"2025-04-18",amount:6000,method:"bonifico"}], pdfPath:null, pdfBlob:null, syncedAt:null },
+      { id:"PRF-2025-003", client:"Gamma Costruzioni Srl", amount:7200,  paid:0,     date:"2025-04-01", due:"2025-05-01", status:"scaduto", notes:[], payments:[], pdfPath:null, pdfBlob:null, syncedAt:null },
+      { id:"PRF-2025-004", client:"Delta Service Srl",     amount:3600,  paid:0,     date:"2025-04-10", due:"2025-05-10", status:"attesa",  notes:[{text:"Pagamento previsto 15/05",author:"Mario",scanned:false}], payments:[], pdfPath:null, pdfBlob:null, syncedAt:null },
+      { id:"PRF-2025-005", client:"Epsilon Tech Srl",      amount:9800,  paid:9800,  date:"2025-04-05", due:"2025-05-05", status:"pagato",  notes:[], payments:[{date:"2025-04-28",amount:9800,method:"assegno"}], pdfPath:null, pdfBlob:null, syncedAt:null },
+      { id:"PRF-2025-006", client:"Zeta Industries Spa",   amount:22000, paid:11000, date:"2025-04-12", due:"2025-05-12", status:"parziale",notes:[{text:"II rata accordata 01/06",author:"Staff",scanned:true}], payments:[{date:"2025-05-01",amount:11000,method:"bonifico"}], pdfPath:null, pdfBlob:null, syncedAt:null },
+    ];
+
+    const YD = "https://cloud-api.yandex.net/v1/disk";
+    const ydHeaders = t => ({ Authorization:`OAuth ${t}` });
+
+    async function ydList(token, path="/") {
+      const r = await fetch(`${YD}/resources?path=${encodeURIComponent(path)}&limit=200&sort=name`, { headers:ydHeaders(token) });
+      if (!r.ok) { const e = await r.json().catch(()=>{}); throw new Error(e?.message || `Errore ${r.status}`); }
+      return r.json();
+    }
+    async function ydDownloadUrl(token, path) {
+      const r = await fetch(`${YD}/resources/download?path=${encodeURIComponent(path)}`, { headers:ydHeaders(token) });
+      if (!r.ok) throw new Error(`Download URL: ${r.status}`);
+      return (await r.json()).href;
+    }
+    async function fetchPdfBuffer(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("Download PDF fallito");
+      return r.arrayBuffer();
+    }
+    function bufToB64(buf) {
+      let b=""; const u=new Uint8Array(buf); for (let i=0;i<u.byteLength;i++) b+=String.fromCharCode(u[i]); return btoa(b);
+    }
+
+    async function callAI(messages, system) {
+      const body = { model:"claude-opus-4-5", max_tokens:1200, messages };
+      if (system) body.system = system;
+      const r = await fetch("https://api.anthropic.com/v1/messages",{ method:"POST", headers:{"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"}, body:JSON.stringify(body) });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error.message);
+      return d.content?.[0]?.text ?? "";
+    }
+
+    async function parsePdfWithAI(b64) {
+      const raw = await callAI([{ role:"user", content:[
+        { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+        { type:"text", text:`Sei un assistente contabile italiano. Analizza questo PDF (proforma, fattura o scansione).
+Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
+{
+  "tipo":"proforma|fattura|nota_credito|sconosciuto",
+  "numero":"...",
+  "data_emissione":"YYYY-MM-DD",
+  "data_scadenza":"YYYY-MM-DD",
+  "cliente":{"ragione_sociale":"...","piva":"...","indirizzo":"..."},
+  "importo_totale":0.00,
+  "importo_iva":0.00,
+  "importo_imponibile":0.00,
+  "righe":[{"descrizione":"...","quantita":0,"prezzo_unitario":0,"totale":0}],
+  "note":"...",
+  "stato_pagamento":"non_pagato|parziale|pagato|sconosciuto",
+  "metodo_pagamento_indicato":"...",
+  "affidabilita_estrazione":"alta|media|bassa",
+  "note_ocr":"eventuali problemi lettura o testo manoscritto"
+}` }
+      ]}]);
+      try { return JSON.parse(raw.replace(/```json|```/g,"").trim()); }
+      catch { return { parse_error:true, raw_text:raw }; }
+    }
+
+    function CEDDashboard() {
+      const [invoices, setInvoicesRaw] = useState(() => {
+        const saved = LS.get("ced_invoices", null);
+        return saved ? saved.map(i=>({...i, pdfBlob:null})) : SAMPLE;
+      });
+      const [blobMap, setBlobMap] = useState({});
+
+      const setInvoices = useCallback(updater => {
+        setInvoicesRaw(prev => {
+          const next = typeof updater==="function" ? updater(prev) : updater;
+          LS.set("ced_invoices", next.map(i=>{ const {pdfBlob,...rest}=i; return rest; }));
+          return next;
+        });
+      }, []);
+
+      const [tab, setTab]               = useState("dashboard");
+      const [selected, setSelected]     = useState(null);
+      const [filterS, setFilterS]       = useState("tutti");
+      const [showPay, setShowPay]       = useState(false);
+      const [payAmt, setPayAmt]         = useState("");
+      const [payMth, setPayMth]         = useState("bonifico");
+      const [noteText, setNoteText]     = useState("");
+      const [aiLoading, setAiLoading]   = useState(false);
+      const [aiResult, setAiResult]     = useState("");
+      const [ocrText, setOcrText]       = useState("");
+      const [ocrResult, setOcrResult]   = useState("");
+      const [ocrLoading, setOcrLoading] = useState(false);
+      const [apiKey, setApiKey]         = useState(()=>LS.raw("ced_api_key"));
+      const [showApiKey, setShowApiKey] = useState(false);
+
+      const [ydToken, setYdToken]       = useState(()=>LS.raw("yd_token"));
+      const [ydSyncPath, setYdSyncPath] = useState(()=>LS.raw("yd_sync_path")||"/Proforma");
+      const [ydPath, setYdPath]         = useState("/");
+      const [ydItems, setYdItems]       = useState([]);
+      const [ydLoading, setYdLoading]   = useState(false);
+      const [ydError, setYdError]       = useState("");
+      const [ydCrumb, setYdCrumb]       = useState(["/"]);
+      const [pdfLoading, setPdfLoading] = useState(false);
+      const [pdfResult, setPdfResult]   = useState(null);
+      const [viewerInv, setViewerInv]   = useState(null);
+      const [syncStatus, setSyncStatus] = useState("idle");
+      const [syncLog, setSyncLog]       = useState(()=>LS.get("ced_sync_log",[]));
+      const [lastSync, setLastSync]     = useState(()=>LS.raw("ced_last_sync"));
+      const [autoSync, setAutoSync]     = useState(()=>LS.get("ced_auto_sync",false));
+
+      const totale    = invoices.reduce((s,i)=>s+i.amount,0);
+      const incassato = invoices.reduce((s,i)=>s+i.paid,0);
+      const residuo   = totale-incassato;
+      const scadutiV  = invoices.filter(i=>i.status==="scaduto").reduce((s,i)=>s+(i.amount-i.paid),0);
+      const filtered  = filterS==="tutti" ? invoices : invoices.filter(i=>i.status===filterS);
+
+      // Wrapper AI che inietta la API key
+      const callAIWithKey = async (messages, system) => {
+        const key = LS.raw("ced_api_key");
+        if (!key) throw new Error("API key Anthropic non configurata. Impostala nel pannello in alto.");
+        const body = { model:"claude-opus-4-5", max_tokens:1200, messages };
+        if (system) body.system = system;
+        const r = await fetch("https://api.anthropic.com/v1/messages",{
+          method:"POST",
+          headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+          body:JSON.stringify(body)
+        });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error.message);
+        return d.content?.[0]?.text ?? "";
+      };
+
+      useEffect(()=>{
+        if (!autoSync || !ydToken) return;
+        const shouldRun = ()=>{
+          const ls = LS.raw("ced_last_sync");
+          if (!ls) return true;
+          return ls.split("T")[0] !== todayStr();
+        };
+        if (shouldRun()) runSync();
+        const iv = setInterval(()=>{ if (shouldRun()) runSync(); }, 60*60*1000);
+        return ()=>clearInterval(iv);
+      }, [autoSync, ydToken]);
+
+      const downloadAndStorePdf = async (token, ydPathItem, itemName) => {
+        const dlUrl = await ydDownloadUrl(token, ydPathItem);
+        const buf   = await fetchPdfBuffer(dlUrl);
+        const blob  = new Blob([buf], { type:"application/pdf" });
+        const url   = URL.createObjectURL(blob);
+        return { buf, blob, url, name:itemName };
+      };
+
+      const parsePdf = async (item) => {
+        setPdfLoading(true); setPdfResult(null); setYdError("");
+        try {
+          const { buf, url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
+          const b64  = bufToB64(buf);
+          const key  = LS.raw("ced_api_key");
+          if (!key) throw new Error("API key Anthropic non configurata");
+          const raw = await (async()=>{
+            const body = { model:"claude-sonnet-4-20250514", max_tokens:1200, messages:[{ role:"user", content:[
+              { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+              { type:"text", text:`Sei un assistente contabile italiano. Analizza questo PDF.\nRispondi SOLO con JSON valido:\n{"tipo":"proforma|fattura|nota_credito|sconosciuto","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"...","indirizzo":"..."},"importo_totale":0.00,"importo_iva":0.00,"importo_imponibile":0.00,"righe":[{"descrizione":"...","quantita":0,"prezzo_unitario":0,"totale":0}],"note":"...","stato_pagamento":"non_pagato|parziale|pagato|sconosciuto","metodo_pagamento_indicato":"...","affidabilita_estrazione":"alta|media|bassa","note_ocr":"..."}` }
+            ]}] };
+            const r = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify(body)});
+            const d = await r.json();
+            if (d.error) throw new Error(d.error.message);
+            return d.content?.[0]?.text ?? "";
+          })();
+          let data;
+          try { data = JSON.parse(raw.replace(/```json|```/g,"").trim()); }
+          catch { data = { parse_error:true, raw_text:raw }; }
+          setPdfResult({ fileName:name, path:item.path, url, data });
+        } catch(e) { setYdError("Errore lettura PDF: "+e.message); }
+        setPdfLoading(false);
+      };
+
+      const importInvoice = () => {
+        if (!pdfResult?.data || pdfResult.data.parse_error) return;
+        const d = pdfResult.data;
+        const id = d.numero || `PRF-IMP-${Date.now()}`;
+        const newInv = {
+          id, client:d.cliente?.ragione_sociale||"Cliente sconosciuto",
+          amount:d.importo_totale||0, paid:0,
+          date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
+          status:"attesa",
+          notes:d.note?[{text:d.note,author:"Import PDF",scanned:d.affidabilita_estrazione==="bassa"}]:[],
+          payments:[], pdfPath:pdfResult.path, syncedAt:now(),
+        };
+        setBlobMap(m=>({...m, [id]:{ url:pdfResult.url, name:pdfResult.fileName }}));
+        setInvoices(p=>[newInv,...p.filter(i=>i.id!==id)]);
+        setPdfResult(null);
+        setTab("fatture"); setSelected(newInv);
+      };
+
+      const runSync = useCallback(async()=>{
+        if (!ydToken) { setYdError("Token Yandex mancante"); return; }
+        setSyncStatus("running");
+        const log = [];
+        const addLog = (msg,type="info")=>{ log.push({msg,type,ts:new Date().toLocaleTimeString("it-IT")}); setSyncLog([...log]); };
+        addLog(`Avvio sync cartella: ${ydSyncPath}`);
+        try {
+          const existing = new Set(invoices.map(i=>i.pdfPath).filter(Boolean));
+          const data     = await ydList(ydToken, ydSyncPath);
+          const pdfs     = (data._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
+          addLog(`Trovati ${pdfs.length} PDF nella cartella`);
+          let added=0, skipped=0;
+          for (const item of pdfs) {
+            if (existing.has(item.path)) { addLog(`↳ Già importato: ${item.name}`,"skip"); skipped++; continue; }
+            addLog(`↳ Elaborazione: ${item.name}...`);
+            try {
+              const { buf, url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
+              const b64  = bufToB64(buf);
+              const d    = await callAIWithKey([{ role:"user", content:[
+                { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+                { type:"text", text:`Analizza questo PDF contabile. Rispondi SOLO JSON: {"tipo":"...","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"..."},"importo_totale":0.00,"note":"...","affidabilita_estrazione":"alta|media|bassa"}` }
+              ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/```json|```/g,"").trim()); } catch { return { parse_error:true }; } });
+              if (d.parse_error) { addLog(`  ✗ Parse fallito: ${item.name}`,"error"); continue; }
+              const id = d.numero || `PRF-SYNC-${Date.now()}-${added}`;
+              const newInv = {
+                id, client:d.cliente?.ragione_sociale||item.name.replace(".pdf",""),
+                amount:d.importo_totale||0, paid:0,
+                date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
+                status:"attesa",
+                notes:d.note?[{text:d.note,author:"Sync auto",scanned:d.affidabilita_estrazione==="bassa"}]:[],
+                payments:[], pdfPath:item.path, syncedAt:now(),
+              };
+              setBlobMap(m=>({...m,[id]:{ url, name }}));
+              setInvoices(p=>[newInv,...p.filter(i=>i.id!==id)]);
+              addLog(`  ✓ Importato: ${d.cliente?.ragione_sociale||id} — ${fmt(d.importo_totale||0)}`,"ok");
+              added++;
+            } catch(e) { addLog(`  ✗ Errore ${item.name}: ${e.message}`,"error"); }
+          }
+          const ts = now();
+          LS.setRaw("ced_last_sync", ts); setLastSync(ts);
+          LS.set("ced_sync_log", log);
+          addLog(`Sync completata: ${added} importati, ${skipped} già presenti`,"ok");
+          setSyncStatus("done");
+        } catch(e) {
+          addLog(`Errore sync: ${e.message}`,"error");
+          setSyncStatus("error");
+        }
+      }, [ydToken, ydSyncPath, invoices]);
+
+      const ydBrowse = useCallback(async(path, token)=>{
+        const t=token||ydToken; if(!t) return;
+        setYdLoading(true); setYdError("");
+        try {
+          const data=await ydList(t,path);
+          setYdItems((data._embedded?.items||[]).filter(it=>it.type==="dir"||(it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"))));
+          setYdPath(path);
+        } catch(e) { setYdError(e.message); }
+        setYdLoading(false);
+      },[ydToken]);
+
+      const saveToken=()=>{ LS.setRaw("yd_token",ydToken); LS.setRaw("yd_sync_path",ydSyncPath); ydBrowse("/",ydToken); };
+
+      const navTo=(path)=>{
+        const parts=path.split("/").filter(Boolean);
+        setYdCrumb(["/",...parts]);
+        ydBrowse(path||"/");
+      };
+
+      const loadPdfForViewer = async(inv)=>{
+        if (blobMap[inv.id]) { setViewerInv(inv); setTab("viewer"); return; }
+        if (!inv.pdfPath || !ydToken) { alert("PDF non disponibile. Verifica connessione Yandex."); return; }
+        setPdfLoading(true);
+        try {
+          const { url, name } = await downloadAndStorePdf(ydToken, inv.pdfPath, inv.pdfPath.split("/").pop());
+          setBlobMap(m=>({...m,[inv.id]:{ url, name }}));
+          setViewerInv(inv);
+          setTab("viewer");
+        } catch(e) { setYdError("Errore caricamento PDF: "+e.message); }
+        setPdfLoading(false);
+      };
+
+      const addPayment=()=>{
+        const amt=parseFloat(payAmt); if(!amt||!selected) return;
+        setInvoices(p=>p.map(inv=>{
+          if(inv.id!==selected.id) return inv;
+          const newPaid=Math.min(inv.paid+amt,inv.amount);
+          const u={...inv,paid:newPaid,status:newPaid>=inv.amount?"pagato":"parziale",
+            payments:[...inv.payments,{date:todayStr(),amount:amt,method:payMth}]};
+          setSelected(u); return u;
+        }));
+        setPayAmt(""); setShowPay(false);
+      };
+
+      const addNote=()=>{
+        if(!noteText.trim()||!selected) return;
+        setInvoices(p=>p.map(inv=>{
+          if(inv.id!==selected.id) return inv;
+          const u={...inv,notes:[...inv.notes,{text:noteText,author:"Utente",scanned:false}]};
+          setSelected(u); return u;
+        }));
+        setNoteText("");
+      };
+
+      const analyzeAI=async(type)=>{
+        setAiLoading(true); setAiResult("");
+        const snap={invoices:invoices.map(i=>({id:i.id,client:i.client,amount:i.amount,paid:i.paid,status:i.status,due:i.due})),totale,incassato,residuo,scadutiV};
+        const prompts={
+          cashflow:`Analisi cash flow 60 giorni per centro elaborazione dati. Dati: ${JSON.stringify(snap)}. Includi: entrate settimanali previste con date, rischi liquidità, clienti critici, azioni. In italiano con importi in euro.`,
+          solleciti:`Genera testi sollecito per clienti con pagamenti scaduti o parziali: ${JSON.stringify(snap)}. Per ogni cliente: tono professionale, importo residuo, scadenza. In italiano.`,
+          analisi:`Analisi KPI pagamenti CED: ${JSON.stringify(snap)}. Calcola DSO, tasso incasso, analisi scaduto, raccomandazioni. In italiano.`,
+        };
+        try { setAiResult(await callAIWithKey([{role:"user",content:prompts[type]}])); }
+        catch(e) { setAiResult("Errore AI: "+e.message); }
+        setAiLoading(false);
+      };
+
+      const analyzeOcr=async()=>{
+        if(!ocrText.trim()) return;
+        setOcrLoading(true); setOcrResult("");
+        try { setOcrResult(await callAIWithKey([{role:"user",content:`Estrai informazioni pagamento da questa nota staff: "${ocrText}". Estrai importo, data prevista, cliente, azione. Rispondi in italiano con JSON + spiegazione.`}])); }
+        catch(e) { setOcrResult("Errore: "+e.message); }
+        setOcrLoading(false);
+      };
+
+      const exportCSV=()=>{
+        const rows=[["ID","Cliente","Importo","Pagato","Residuo","Scadenza","Stato","PDF path","Sincronizzato","Note"],
+          ...invoices.map(i=>[i.id,i.client,i.amount,i.paid,i.amount-i.paid,i.due||"",i.status,i.pdfPath||"",i.syncedAt||"",i.notes.map(n=>n.text).join("; ")])];
+        const csv=rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+        const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8;"})); a.download="proforma_CED.csv"; a.click();
+      };
+
+      const TABS=[
+        {id:"dashboard",label:"Dashboard", icon:"ti-layout-dashboard"},
+        {id:"fatture",  label:"Proforma",  icon:"ti-file-invoice"},
+        {id:"pagamenti",label:"Pagamenti", icon:"ti-credit-card"},
+        {id:"yandex",   label:"Archivio",  icon:"ti-cloud"},
+        {id:"sync",     label:"Sync Auto", icon:"ti-refresh"},
+        {id:"ai",       label:"AI Report", icon:"ti-sparkles"},
+        {id:"ocr",      label:"Note OCR",  icon:"ti-scan"},
+      ];
+
+      const logC={info:"var(--color-text-secondary)",ok:C.green,error:C.red,skip:C.gray};
+
+      return(
+        <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",maxWidth:920,margin:"0 auto",padding:"0 0 50px"}}>
+
+          {/* ── API Key banner ── */}
+          <div style={{background:"#1a1917",padding:"10px 16px",borderRadius:10,marginBottom:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <i className="ti ti-key" style={{fontSize:15,color:"#f0c040"}}/>
+            <span style={{fontSize:11,color:"#ccc",flex:1}}>API key Anthropic (per AI Report, OCR, lettura PDF)</span>
+            <input
+              type={showApiKey?"text":"password"}
+              value={apiKey}
+              onChange={e=>setApiKey(e.target.value)}
+              placeholder="sk-ant-..."
+              style={{padding:"4px 9px",borderRadius:6,border:"1px solid #444",background:"#2a2a2a",color:"#f0f0f0",fontSize:12,fontFamily:"monospace",width:260}}
+            />
+            <button onClick={()=>setShowApiKey(v=>!v)} style={{background:"none",border:"none",color:"#aaa",cursor:"pointer",fontSize:13}}>
+              <i className={`ti ${showApiKey?"ti-eye-off":"ti-eye"}`}/>
+            </button>
+            <button onClick={()=>{ LS.setRaw("ced_api_key",apiKey); alert("API key salvata!"); }} style={{padding:"4px 12px",background:"#f0c040",color:"#1a1917",border:"none",borderRadius:6,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              Salva
+            </button>
+          </div>
+
+          {/* ── Header ── */}
+          <div style={{background:C.blue,padding:"16px 20px",borderRadius:12,marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:9}}>
+                  <i className="ti ti-building-bank" style={{fontSize:24,color:"#B5D4F4"}}/>
+                  <h1 style={{margin:0,fontSize:18,fontWeight:500,color:"#E6F1FB"}}>FocusData · Monitor Pagamenti CED</h1>
+                </div>
+                <p style={{margin:"2px 0 0",fontSize:11,color:"#85B7EB"}}>
+                  Proforma · PDF Yandex Disk · Sync automatica · Cash Flow
+                  {lastSync && <span style={{marginLeft:10,opacity:.8}}>· Ultima sync: {new Date(lastSync).toLocaleString("it-IT")}</span>}
+                </p>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                {autoSync && <span style={{fontSize:11,padding:"4px 10px",borderRadius:10,background:"rgba(255,255,255,0.15)",color:"#E6F1FB",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-refresh" style={{fontSize:12}}/> Auto-sync ON</span>}
+                <button onClick={exportCSV} style={{background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.25)",color:"#E6F1FB",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                  <i className="ti ti-table-export"/> CSV
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Tabs ── */}
+          <div style={{display:"flex",gap:2,marginBottom:14,background:"var(--color-background-secondary)",padding:3,borderRadius:10,border:"0.5px solid var(--color-border-tertiary)",overflowX:"auto"}}>
+            {TABS.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:"0 0 auto",padding:"6px 8px",border:"none",borderRadius:8,background:tab===t.id?"var(--color-background-primary)":"transparent",color:tab===t.id?C.blue:"var(--color-text-secondary)",fontWeight:tab===t.id?500:400,fontSize:11,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:70,boxShadow:tab===t.id?"0 1px 4px rgba(0,0,0,0.08)":"none",transition:"all .15s"}}>
+                <i className={`ti ${t.icon}`} style={{fontSize:14}}/>{t.label}
+              </button>
+            ))}
+            {viewerInv && (
+              <button onClick={()=>setTab("viewer")} style={{flex:"0 0 auto",padding:"6px 8px",border:"none",borderRadius:8,background:tab==="viewer"?"var(--color-background-primary)":"transparent",color:tab==="viewer"?C.purple:"var(--color-text-secondary)",fontSize:11,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:70}}>
+                <i className="ti ti-eye" style={{fontSize:14}}/> Viewer
+              </button>
+            )}
+          </div>
+
+          {/* ══ DASHBOARD ══ */}
+          {tab==="dashboard" && (
+            <div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14}}>
+                {[
+                  {label:"Fatturato",value:fmt(totale),  icon:"ti-receipt",        bg:C.blueL, c:C.blue},
+                  {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  bg:C.greenL,c:C.green},
+                  {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         bg:C.amberL,c:C.amber},
+                  {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",bg:C.redL,  c:C.red},
+                ].map(k=>(
+                  <div key={k.label} style={{background:k.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${k.c}22`}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                      <p style={{margin:0,fontSize:10,color:k.c,fontWeight:500,textTransform:"uppercase",letterSpacing:.4}}>{k.label}</p>
+                      <i className={`ti ${k.icon}`} style={{fontSize:15,color:k.c,opacity:.7}}/>
+                    </div>
+                    <p style={{margin:"5px 0 0",fontSize:19,fontWeight:500,color:k.c}}>{k.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                  <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>Tasso di incasso</span>
+                  <span style={{fontSize:12,fontWeight:500}}>{totale>0?Math.round((incassato/totale)*100):0}%</span>
+                </div>
+                <div style={{background:C.grayL,borderRadius:6,height:8,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${totale>0?(incassato/totale)*100:0}%`,background:C.green,borderRadius:6,transition:"width .5s"}}/>
+                </div>
+                <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}}>
+                  {Object.entries(STATUS).map(([k,v])=>(
+                    <div key={k} style={{display:"flex",alignItems:"center",gap:4}}>
+                      <div style={{width:7,height:7,borderRadius:2,background:v.c}}/><span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{v.label}: {invoices.filter(i=>i.status===k).length}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
+                <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Scadenze critiche</h3>
+                {invoices.filter(i=>i.status!=="pagato").sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).slice(0,5).map(inv=>(
+                  <div key={inv.id} onClick={()=>{setSelected(inv);setTab("fatture");}} style={{display:"flex",alignItems:"center",padding:"8px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",gap:10}}>
+                    <div style={{width:32,height:32,borderRadius:8,background:STATUS[inv.status].bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <i className={`ti ${STATUS[inv.status].icon}`} style={{fontSize:14,color:STATUS[inv.status].c}}/>
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{margin:0,fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.client}</p>
+                      <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{inv.id} · Scad. {inv.due?fmtD(inv.due):"—"}</p>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <p style={{margin:0,fontSize:13,fontWeight:500,color:STATUS[inv.status].c}}>{fmt(inv.amount-inv.paid)}</p>
+                      {inv.pdfPath && <span style={{fontSize:10,color:C.purple,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:2}}><i className="ti ti-paperclip" style={{fontSize:10}}/>PDF</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ══ FATTURE ══ */}
+          {tab==="fatture" && (
+            <div>
+              <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
+                {["tutti","pagato","parziale","attesa","scaduto"].map(s=>(
+                  <button key={s} onClick={()=>setFilterS(s)} style={{padding:"4px 12px",borderRadius:20,border:filterS===s?`1.5px solid ${s==="tutti"?C.blue:STATUS[s]?.c}`:"0.5px solid var(--color-border-tertiary)",background:filterS===s?(s==="tutti"?C.blueL:STATUS[s]?.bg):"transparent",color:filterS===s?(s==="tutti"?C.blue:STATUS[s]?.c):"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:filterS===s?500:400}}>
+                    {s==="tutti"?"Tutte":STATUS[s]?.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                {filtered.map(inv=>(
+                  <div key={inv.id} onClick={()=>setSelected(selected?.id===inv.id?null:inv)} style={{background:"var(--color-background-primary)",border:`0.5px solid ${selected?.id===inv.id?C.blue:"var(--color-border-tertiary)"}`,borderRadius:12,padding:"12px 14px",cursor:"pointer",transition:"border-color .15s"}}>
+                    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",gap:5,marginBottom:3,flexWrap:"wrap",alignItems:"center"}}>
+                          <span style={{fontSize:10,color:C.gray,fontFamily:"monospace"}}>{inv.id}</span>
+                          <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:STATUS[inv.status].bg,color:STATUS[inv.status].c,fontWeight:500}}>{STATUS[inv.status].label}</span>
+                          {inv.notes.length>0 && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:C.amberL,color:C.amber}}><i className="ti ti-note" style={{fontSize:10}}/> {inv.notes.length}</span>}
+                          {inv.pdfPath && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:C.purpleL,color:C.purple,cursor:"pointer"}} onClick={e=>{e.stopPropagation();loadPdfForViewer(inv);}}><i className="ti ti-eye" style={{fontSize:10}}/> PDF {blobMap[inv.id]?"(cached)":"(Yandex)"}</span>}
+                          {inv.syncedAt && <span style={{fontSize:10,color:C.gray,opacity:.7}}>sync {fmtD(inv.syncedAt.split("T")[0])}</span>}
+                        </div>
+                        <p style={{margin:"0 0 2px",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.client}</p>
+                        <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>Emessa {fmtD(inv.date)} · Scad. {inv.due?fmtD(inv.due):"—"}</p>
+                      </div>
+                      <div style={{textAlign:"right",minWidth:100}}>
+                        <p style={{margin:"0 0 1px",fontSize:14,fontWeight:500}}>{fmt(inv.amount)}</p>
+                        {inv.paid>0 && <p style={{margin:0,fontSize:10,color:C.green}}>+{fmt(inv.paid)}</p>}
+                        {inv.amount-inv.paid>0 && <p style={{margin:0,fontSize:10,color:STATUS[inv.status].c}}>{fmt(inv.amount-inv.paid)} res.</p>}
+                      </div>
+                    </div>
+                    {inv.amount>0 && <div style={{marginTop:7,background:"var(--color-background-secondary)",borderRadius:4,height:3,overflow:"hidden"}}><div style={{height:"100%",width:`${(inv.paid/inv.amount)*100}%`,background:inv.paid>=inv.amount?C.green:C.amber,borderRadius:4}}/></div>}
+
+                    {selected?.id===inv.id && (
+                      <div style={{marginTop:12,borderTop:"0.5px solid var(--color-border-tertiary)",paddingTop:12}}>
+                        {inv.payments.length>0 && (
+                          <div style={{marginBottom:10}}>
+                            <p style={{margin:"0 0 5px",fontSize:12,fontWeight:500}}>Pagamenti</p>
+                            {inv.payments.map((p,i)=>(
+                              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 8px",background:C.greenL,borderRadius:7,marginBottom:3,fontSize:11}}>
+                                <span style={{color:C.teal}}>{fmtD(p.date)} · {p.method}</span>
+                                <span style={{fontWeight:500,color:C.green}}>{fmt(p.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {inv.notes.length>0 && (
+                          <div style={{marginBottom:10}}>
+                            <p style={{margin:"0 0 5px",fontSize:12,fontWeight:500}}>Note</p>
+                            {inv.notes.map((n,i)=>(
+                              <div key={i} style={{padding:"5px 8px",background:C.amberL,borderRadius:7,marginBottom:3,fontSize:11}}>
+                                {n.scanned && <span style={{fontSize:10,padding:"0 5px",borderRadius:4,background:C.coral+"22",color:C.coral,marginRight:5}}>📷</span>}
+                                <span style={{color:C.amber,fontStyle:"italic"}}>"{n.text}"</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                          <button onClick={e=>{e.stopPropagation();setShowPay(true);}} style={{padding:"6px 12px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4}}>
+                            <i className="ti ti-plus"/> Pagamento
+                          </button>
+                          {inv.pdfPath && (
+                            <button onClick={e=>{e.stopPropagation();loadPdfForViewer(inv);}} disabled={pdfLoading} style={{padding:"6px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
+                              {pdfLoading?<><i className="ti ti-loader-2"/> Carico...</>:<><i className="ti ti-eye"/> Visualizza PDF</>}
+                            </button>
+                          )}
+                          <button onClick={e=>{e.stopPropagation();setTab("yandex");}} style={{padding:"6px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
+                            <i className="ti ti-cloud"/> Da Yandex
+                          </button>
+                        </div>
+                        {showPay && selected?.id===inv.id && (
+                          <div style={{marginTop:10,padding:10,background:C.blueL,borderRadius:9,border:`1px solid ${C.blue}44`}} onClick={e=>e.stopPropagation()}>
+                            <p style={{margin:"0 0 7px",fontSize:12,fontWeight:500,color:C.blue}}>Registra incasso</p>
+                            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                              <input type="number" placeholder={`Max ${fmt(inv.amount-inv.paid)}`} value={payAmt} onChange={e=>setPayAmt(e.target.value)} style={{padding:"5px 9px",borderRadius:7,border:"1px solid "+C.blue+"44",fontSize:12,width:120}}/>
+                              <select value={payMth} onChange={e=>setPayMth(e.target.value)} style={{padding:"5px 9px",borderRadius:7,border:"1px solid "+C.blue+"44",fontSize:12}}>
+                                <option value="bonifico">Bonifico</option><option value="assegno">Assegno</option>
+                                <option value="contante">Contante</option><option value="rid">RID/SDD</option>
+                              </select>
+                              <button onClick={addPayment} style={{padding:"5px 12px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:12,cursor:"pointer",fontWeight:500}}>Salva</button>
+                              <button onClick={()=>setShowPay(false)} style={{background:"none",border:"none",color:C.gray,fontSize:11,cursor:"pointer"}}>✕</button>
+                            </div>
+                          </div>
+                        )}
+                        <div style={{marginTop:8,display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+                          <input value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Aggiungi nota..." style={{flex:1,padding:"5px 9px",borderRadius:7,border:"0.5px solid var(--color-border-secondary)",fontSize:11}}/>
+                          <button onClick={addNote} style={{padding:"5px 10px",background:C.amberL,color:C.amber,border:`1px solid ${C.amber}33`,borderRadius:7,fontSize:11,cursor:"pointer"}}>+ Nota</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ══ PAGAMENTI ══ */}
+          {tab==="pagamenti" && (
+            <div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Registro incassi</h3>
+                {invoices.filter(i=>i.payments.length>0).flatMap(i=>i.payments.map(p=>({...p,client:i.client,invoice:i.id}))).sort((a,b)=>new Date(b.date)-new Date(a.date)).map((p,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",gap:9}}>
+                    <div style={{width:30,height:30,borderRadius:7,background:C.greenL,display:"flex",alignItems:"center",justifyContent:"center"}}><i className="ti ti-arrow-down" style={{color:C.green,fontSize:13}}/></div>
+                    <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:500}}>{p.client}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{p.invoice} · {p.method} · {fmtD(p.date)}</p></div>
+                    <span style={{fontSize:13,fontWeight:500,color:C.green}}>{fmt(p.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div style={{background:C.greenL,borderRadius:12,padding:"12px 14px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.teal,fontWeight:500}}>INCASSATO</p><p style={{margin:0,fontSize:20,fontWeight:500,color:C.green}}>{fmt(incassato)}</p></div>
+                <div style={{background:C.amberL,borderRadius:12,padding:"12px 14px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.amber,fontWeight:500}}>DA INCASSARE</p><p style={{margin:0,fontSize:20,fontWeight:500,color:C.amber}}>{fmt(residuo)}</p></div>
+              </div>
+            </div>
+          )}
+
+          {/* ══ YANDEX ══ */}
+          {tab==="yandex" && (
+            <div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
+                  <i className="ti ti-cloud" style={{fontSize:18,color:C.blue}}/><h3 style={{margin:0,fontSize:13,fontWeight:500}}>Connessione Yandex Disk</h3>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,marginBottom:8}}>
+                  <input type="password" value={ydToken} onChange={e=>setYdToken(e.target.value)} placeholder="OAuth token Yandex..." style={{padding:"6px 9px",borderRadius:7,border:"0.5px solid var(--color-border-secondary)",fontSize:12,fontFamily:"monospace"}}/>
+                  <button onClick={saveToken} style={{padding:"6px 14px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:12,cursor:"pointer",fontWeight:500}}>Connetti</button>
+                </div>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Cartella sync:</span>
+                  <input value={ydSyncPath} onChange={e=>setYdSyncPath(e.target.value)} style={{flex:1,padding:"4px 8px",borderRadius:7,border:"0.5px solid var(--color-border-secondary)",fontSize:12,fontFamily:"monospace"}} placeholder="/Proforma"/>
+                  <button onClick={()=>{LS.setRaw("yd_sync_path",ydSyncPath);}} style={{padding:"4px 10px",background:C.tealL,color:C.teal,border:`1px solid ${C.teal}33`,borderRadius:7,fontSize:11,cursor:"pointer"}}>Salva</button>
+                </div>
+                {ydError && <p style={{margin:"7px 0 0",fontSize:11,color:C.red,background:C.redL,padding:"5px 9px",borderRadius:6}}><i className="ti ti-alert-circle" style={{marginRight:4}}/>{ydError}</p>}
+              </div>
+
+              {ydToken && <>
+                <div style={{display:"flex",alignItems:"center",gap:3,marginBottom:8,padding:"5px 10px",background:"var(--color-background-secondary)",borderRadius:8,border:"0.5px solid var(--color-border-tertiary)",flexWrap:"wrap"}}>
+                  <i className="ti ti-folder" style={{fontSize:12,color:C.blue}}/>
+                  {ydCrumb.map((b,i)=>(
+                    <span key={i} style={{display:"flex",alignItems:"center",gap:2}}>
+                      {i>0 && <span style={{color:"var(--color-text-secondary)",fontSize:11}}>›</span>}
+                      <button onClick={()=>{ const p="/"+ydCrumb.slice(1,i+1).join("/"); navTo(p||"/"); }} style={{background:"none",border:"none",color:i===ydCrumb.length-1?C.blue:"var(--color-text-secondary)",fontSize:11,cursor:"pointer",padding:"0 2px",fontWeight:i===ydCrumb.length-1?500:400}}>{b}</button>
+                    </span>
+                  ))}
+                  <button onClick={()=>ydBrowse(ydPath,ydToken)} style={{marginLeft:"auto",background:"none",border:"none",color:C.blue,cursor:"pointer",fontSize:13}}><i className={`ti ti-refresh ${ydLoading?"ti-spin":""}`}/></button>
+                </div>
+
+                <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",marginBottom:12}}>
+                  {ydLoading && <div style={{padding:18,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)"}}><i className="ti ti-loader-2" style={{marginRight:5}}/>Caricamento...</div>}
+                  {!ydLoading && ydItems.length===0 && <div style={{padding:18,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)"}}>Nessun PDF trovato. <button onClick={()=>ydBrowse("/",ydToken)} style={{color:C.blue,background:"none",border:"none",cursor:"pointer",fontSize:12}}>Vai alla radice</button></div>}
+                  {!ydLoading && ydItems.map((item,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",gap:9,cursor:item.type==="dir"?"pointer":"default"}}
+                      onClick={item.type==="dir"?()=>{navTo(item.path); setYdCrumb(p=>[...p,item.name]);}:undefined}>
+                      <div style={{width:30,height:30,borderRadius:7,background:item.type==="dir"?C.blueL:C.purpleL,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <i className={`ti ${item.type==="dir"?"ti-folder":"ti-file-type-pdf"}`} style={{fontSize:14,color:item.type==="dir"?C.blue:C.purple}}/>
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</p>
+                        {item.type==="file" && <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{item.size?(Math.round(item.size/1024)+"KB"):"—"} · {item.modified?fmtD(item.modified.split("T")[0]):"—"}</p>}
+                      </div>
+                      {item.type==="file" && (
+                        <div style={{display:"flex",gap:5}}>
+                          <button onClick={e=>{e.stopPropagation();parsePdf(item);}} disabled={pdfLoading} style={{padding:"5px 10px",background:pdfLoading?C.grayL:C.purpleL,color:pdfLoading?C.gray:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:pdfLoading?"wait":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4}}>
+                            {pdfLoading?<><i className="ti ti-loader-2" style={{fontSize:11}}/>Leggo...</>:<><i className="ti ti-scan" style={{fontSize:11}}/>Leggi AI</>}
+                          </button>
+                        </div>
+                      )}
+                      {item.type==="dir" && <i className="ti ti-chevron-right" style={{fontSize:13,color:"var(--color-text-secondary)"}}/>}
+                    </div>
+                  ))}
+                </div>
+
+                {pdfResult && (
+                  <div style={{background:"var(--color-background-primary)",border:`1px solid ${C.purple}44`,borderRadius:12,padding:"14px 16px"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                      <span style={{fontSize:13,fontWeight:500,color:C.purple,display:"flex",alignItems:"center",gap:6}}><i className="ti ti-sparkles"/>Estratto: {pdfResult.fileName}</span>
+                      <div style={{display:"flex",gap:6}}>
+                        {!pdfResult.data.parse_error && <button onClick={importInvoice} style={{padding:"5px 12px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4}}><i className="ti ti-plus"/>Importa</button>}
+                        <button onClick={()=>{setViewerInv({id:"__preview__",pdfPath:pdfResult.path}); setBlobMap(m=>({...m,__preview__:{url:pdfResult.url,name:pdfResult.fileName}})); setTab("viewer");}} style={{padding:"5px 10px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-eye"/>Visualizza</button>
+                        <button onClick={()=>setPdfResult(null)} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer"}}><i className="ti ti-x"/></button>
+                      </div>
+                    </div>
+                    {pdfResult.data.parse_error ? <pre style={{margin:0,fontSize:11,whiteSpace:"pre-wrap",fontFamily:"inherit"}}>{pdfResult.data.raw_text}</pre> : (
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                        {[["Tipo",pdfResult.data.tipo],["Numero",pdfResult.data.numero],["Data emissione",pdfResult.data.data_emissione],["Scadenza",pdfResult.data.data_scadenza],["Cliente",pdfResult.data.cliente?.ragione_sociale],["P.IVA",pdfResult.data.cliente?.piva],["Totale",pdfResult.data.importo_totale!=null?fmt(pdfResult.data.importo_totale):null],["Imponibile",pdfResult.data.importo_imponibile!=null?fmt(pdfResult.data.importo_imponibile):null],["IVA",pdfResult.data.importo_iva!=null?fmt(pdfResult.data.importo_iva):null],["Metodo pag.",pdfResult.data.metodo_pagamento_indicato],["Affidabilità OCR",pdfResult.data.affidabilita_estrazione]].filter(([,v])=>v!=null&&v!=="").map(([l,v],i)=>(
+                          <div key={i} style={{padding:"5px 8px",background:"var(--color-background-secondary)",borderRadius:7}}>
+                            <p style={{margin:"0 0 1px",fontSize:10,color:"var(--color-text-secondary)"}}>{l}</p>
+                            <p style={{margin:0,fontSize:12,fontWeight:500}}>{v}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {pdfResult.data.righe?.length>0 && (
+                      <div style={{marginTop:8}}>
+                        <p style={{margin:"0 0 4px",fontSize:11,fontWeight:500,color:"var(--color-text-secondary)"}}>Righe</p>
+                        {pdfResult.data.righe.map((r,i)=>(
+                          <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:"var(--color-background-secondary)",borderRadius:5,marginBottom:2,fontSize:11}}>
+                            <span>{r.descrizione}</span><span style={{fontWeight:500}}>{r.totale!=null?fmt(r.totale):""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>}
+            </div>
+          )}
+
+          {/* ══ SYNC AUTO ══ */}
+          {tab==="sync" && (
+            <div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <i className="ti ti-refresh" style={{fontSize:18,color:C.blue}}/><h3 style={{margin:0,fontSize:13,fontWeight:500}}>Sincronizzazione automatica</h3>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:14}}>
+                  <div style={{padding:"10px 14px",background:autoSync?C.greenL:C.grayL,borderRadius:10,border:`1px solid ${autoSync?C.green:C.gray}22`}}>
+                    <p style={{margin:"0 0 6px",fontSize:11,fontWeight:500,color:autoSync?C.green:C.gray}}>SYNC GIORNALIERA</p>
+                    <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                      <div onClick={()=>{ const v=!autoSync; setAutoSync(v); LS.set("ced_auto_sync",v); }} style={{width:36,height:20,borderRadius:10,background:autoSync?C.green:C.grayL,border:`1px solid ${autoSync?C.green:C.gray}44`,position:"relative",cursor:"pointer",transition:"background .2s"}}>
+                        <div style={{position:"absolute",top:2,left:autoSync?17:2,width:16,height:16,borderRadius:8,background:autoSync?"white":C.gray,transition:"left .2s"}}/>
+                      </div>
+                      <span style={{fontSize:12,color:autoSync?C.green:C.gray,fontWeight:500}}>{autoSync?"Attiva":"Disattiva"}</span>
+                    </label>
+                    <p style={{margin:"6px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Controlla ogni ora, importa i nuovi PDF dalla cartella "{ydSyncPath}" una volta al giorno</p>
+                  </div>
+                  <div style={{padding:"10px 14px",background:C.blueL,borderRadius:10,border:`1px solid ${C.blue}22`}}>
+                    <p style={{margin:"0 0 2px",fontSize:11,fontWeight:500,color:C.blue}}>ULTIMA SYNC</p>
+                    <p style={{margin:"0 0 6px",fontSize:13,fontWeight:500,color:C.blue}}>{lastSync?new Date(lastSync).toLocaleString("it-IT"):"Mai eseguita"}</p>
+                    <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Prossima: {autoSync&&lastSync?new Date(new Date(lastSync.split("T")[0]+"T00:00:00").getTime()+86400000).toLocaleDateString("it-IT"):"—"}</p>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:7}}>
+                  <button onClick={runSync} disabled={syncStatus==="running"||!ydToken} style={{padding:"8px 18px",background:syncStatus==="running"?C.grayL:C.blue,color:syncStatus==="running"?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:syncStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
+                    <i className={`ti ti-refresh ${syncStatus==="running"?"ti-spin":""}`}/>{syncStatus==="running"?"Sync in corso...":"Esegui sync ora"}
+                  </button>
+                  <button onClick={()=>{setSyncLog([]); LS.set("ced_sync_log",[]);}} style={{padding:"8px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Pulisci log</button>
+                </div>
+                {!ydToken && <p style={{margin:"8px 0 0",fontSize:11,color:C.red}}>⚠ Configura il token Yandex nella tab Archivio prima di usare la sync.</p>}
+              </div>
+              {syncLog.length>0 && (
+                <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
+                  <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Log operazioni</h3>
+                  <div style={{maxHeight:280,overflowY:"auto",fontFamily:"monospace",fontSize:11,lineHeight:1.8}}>
+                    {syncLog.map((l,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,padding:"1px 0",borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
+                        <span style={{color:"var(--color-text-secondary)",minWidth:52}}>{l.ts}</span>
+                        <span style={{color:logC[l.type]||"var(--color-text-primary)"}}>{l.msg}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={{marginTop:12,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
+                {[
+                  {label:"PDF collegati",value:invoices.filter(i=>i.pdfPath).length,c:C.purple,bg:C.purpleL},
+                  {label:"Sincronizzati",value:invoices.filter(i=>i.syncedAt).length,c:C.teal,bg:C.tealL},
+                  {label:"Totale proforma",value:invoices.length,c:C.blue,bg:C.blueL},
+                ].map(k=>(
+                  <div key={k.label} style={{background:k.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${k.c}22`}}>
+                    <p style={{margin:"0 0 2px",fontSize:10,color:k.c,fontWeight:500}}>{k.label}</p>
+                    <p style={{margin:0,fontSize:20,fontWeight:500,color:k.c}}>{k.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ══ AI REPORT ══ */}
+          {tab==="ai" && (
+            <div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Analisi AI sui dati reali</h3>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:8}}>
+                  {[
+                    {key:"cashflow", label:"Cash Flow 60gg", desc:"Proiezione con date",   icon:"ti-trending-up", bg:C.blueL, c:C.blue},
+                    {key:"solleciti",label:"Genera Solleciti",desc:"Per clienti morosi",    icon:"ti-mail",        bg:C.redL,  c:C.red},
+                    {key:"analisi",  label:"Analisi KPI",    desc:"DSO, tasso incasso",     icon:"ti-chart-bar",   bg:C.greenL,c:C.green},
+                  ].map(a=>(
+                    <button key={a.key} onClick={()=>analyzeAI(a.key)} disabled={aiLoading} style={{padding:"11px 12px",background:a.bg,border:`1px solid ${a.c}33`,borderRadius:9,cursor:aiLoading?"wait":"pointer",textAlign:"left",opacity:aiLoading?.6:1}}>
+                      <i className={`ti ${a.icon}`} style={{fontSize:18,color:a.c,display:"block",marginBottom:5}}/>
+                      <p style={{margin:"0 0 1px",fontSize:12,fontWeight:500,color:a.c}}>{a.label}</p>
+                      <p style={{margin:0,fontSize:10,color:a.c,opacity:.8}}>{a.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {aiLoading && <div style={{padding:14,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}><i className="ti ti-loader-2"/>Analisi AI in corso...</div>}
+              {aiResult && !aiLoading && (
+                <div style={{background:"var(--color-background-primary)",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"14px 16px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <span style={{fontSize:12,fontWeight:500,color:C.blue,display:"flex",alignItems:"center",gap:5}}><i className="ti ti-sparkles"/>Risultato</span>
+                    <button onClick={()=>setAiResult("")} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer"}}><i className="ti ti-x"/></button>
+                  </div>
+                  <pre style={{margin:0,fontSize:12,lineHeight:1.7,whiteSpace:"pre-wrap",fontFamily:"inherit"}}>{aiResult}</pre>
+                </div>
+              )}
+              <div style={{marginTop:10,background:"var(--color-background-secondary)",borderRadius:10,padding:"12px 14px"}}>
+                <button onClick={exportCSV} style={{padding:"7px 14px",background:C.greenL,color:C.green,border:`1px solid ${C.green}33`,borderRadius:7,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontWeight:500}}><i className="ti ti-table-export"/>Esporta CSV / Excel</button>
+              </div>
+            </div>
+          )}
+
+          {/* ══ OCR NOTE ══ */}
+          {tab==="ocr" && (
+            <div>
+              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                <h3 style={{margin:"0 0 4px",fontSize:13,fontWeight:500}}>Note a mano e testo scansionato</h3>
+                <p style={{margin:"0 0 10px",fontSize:11,color:"var(--color-text-secondary)"}}>Incolla testo trascritto o output OCR grezzo. L'AI struttura le informazioni di pagamento.</p>
+                <textarea value={ocrText} onChange={e=>setOcrText(e.target.value)} rows={5} placeholder={"Esempio:\n\"Cliente Beta ha chiamato, conferma saldo 6.500€ entro 30/05 via bonifico. Accordo sig. Rossi.\""} style={{width:"100%",padding:"7px 9px",borderRadius:8,border:"0.5px solid var(--color-border-secondary)",fontSize:12,lineHeight:1.6,resize:"vertical",boxSizing:"border-box"}}/>
+                <div style={{display:"flex",gap:6,marginTop:7}}>
+                  <button onClick={analyzeOcr} disabled={ocrLoading||!ocrText.trim()} style={{padding:"6px 14px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:12,cursor:"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4,opacity:ocrLoading?.6:1}}>
+                    {ocrLoading?<><i className="ti ti-loader-2"/>Elaboro...</>:<><i className="ti ti-scan"/>Analizza</>}
+                  </button>
+                  <button onClick={()=>{setOcrText("");setOcrResult("");}} style={{padding:"6px 10px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:7,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Cancella</button>
+                </div>
+              </div>
+              {ocrResult && !ocrLoading && (
+                <div style={{background:C.amberL,border:`1px solid ${C.amber}44`,borderRadius:12,padding:"12px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}><i className="ti ti-note-off" style={{color:C.amber,fontSize:15}}/><span style={{fontSize:12,fontWeight:500,color:C.amber}}>Informazioni estratte</span></div>
+                  <pre style={{margin:0,fontSize:11,lineHeight:1.7,color:C.coral,whiteSpace:"pre-wrap",fontFamily:"inherit"}}>{ocrResult}</pre>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ PDF VIEWER ══ */}
+          {tab==="viewer" && viewerInv && blobMap[viewerInv.id] && (
+            <div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <i className="ti ti-file-type-pdf" style={{fontSize:18,color:C.purple}}/>
+                  <div>
+                    <p style={{margin:0,fontSize:13,fontWeight:500,color:C.purple}}>{blobMap[viewerInv.id].name}</p>
+                    {viewerInv.id!=="__preview__" && <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{viewerInv.client}</p>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <a href={blobMap[viewerInv.id].url} download={blobMap[viewerInv.id].name} style={{padding:"5px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,textDecoration:"none",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-download"/>Scarica</a>
+                  <button onClick={()=>{setViewerInv(null);setTab("fatture");}} style={{padding:"5px 10px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:7,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-x"/>Chiudi</button>
+                </div>
+              </div>
+              <div style={{border:`1px solid ${C.purple}44`,borderRadius:12,overflow:"hidden",background:"#525659"}}>
+                <iframe src={blobMap[viewerInv.id].url} title="Visualizzatore PDF" style={{width:"100%",height:640,border:"none",display:"block"}}/>
+              </div>
+              <p style={{margin:"7px 0 0",fontSize:10,color:"var(--color-text-secondary)",textAlign:"center"}}>Se il PDF non si visualizza nel browser, usa il pulsante Scarica.</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<CEDDashboard />);
+  </script>
+</body>
+</html>
