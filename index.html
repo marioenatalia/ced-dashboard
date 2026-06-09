@@ -362,21 +362,35 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         const n = (name||"").toLowerCase().trim();
         return EXCLUDE_DIRS.some(x=>n===x || n.includes(x));
       };
-      const walkFolderForPdfs = async (token, path, addLog, depth=0) => {
+      // Raccoglie PDF attivi + PDF dentro cartelle "pagato" (paidSet = set di path)
+      const walkFolderForPdfs = async (token, path, addLog, paidSet, depth=0) => {
         if (depth > 6) return [];                 // safety anti-loop
         let pdfs = [];
         const data  = await ydList(token, path);
         const items = data._embedded?.items || [];
         for (const it of items) {
           if (it.type === "dir") {
-            if (isExcludedDir(it.name)) { addLog(`  ⊘ Salto cartella "pagato": ${it.path}`,"skip"); continue; }
-            const sub = await walkFolderForPdfs(token, it.path, addLog, depth+1);
+            if (isExcludedDir(it.name)) {
+              addLog(`  ⊘ Cartella pagato: ${it.path}`,"skip");
+              // raccogli i path dei PDF dentro le cartelle pagato (anche annidate)
+              await collectPaidPdfs(token, it.path, paidSet, 0);
+              continue;
+            }
+            const sub = await walkFolderForPdfs(token, it.path, addLog, paidSet, depth+1);
             pdfs = pdfs.concat(sub);
           } else if (it.type === "file" && it.name.toLowerCase().endsWith(".pdf")) {
             pdfs.push(it);
           }
         }
         return pdfs;
+      };
+      const collectPaidPdfs = async (token, path, paidSet, depth) => {
+        if (depth > 5) return;
+        const data = await ydList(token, path);
+        for (const it of (data._embedded?.items||[])) {
+          if (it.type === "dir") await collectPaidPdfs(token, it.path, paidSet, depth+1);
+          else if (it.type === "file" && it.name.toLowerCase().endsWith(".pdf")) paidSet.add(it.name.toLowerCase());
+        }
       };
 
       const runSync = useCallback(async()=>{
@@ -388,8 +402,24 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         try {
           const existing = new Set(invoices.map(i=>i.pdfPath).filter(Boolean));
           addLog(`Scansione sottocartelle in corso...`);
-          const pdfs = await walkFolderForPdfs(ydToken, ydSyncPath, addLog);
-          addLog(`Trovati ${pdfs.length} PDF (escluse cartelle pagato)`);
+          const paidSet = new Set();
+          const pdfs = await walkFolderForPdfs(ydToken, ydSyncPath, addLog, paidSet);
+          addLog(`Trovati ${pdfs.length} PDF attivi · ${paidSet.size} in cartelle pagato`);
+
+          // Riconcilia: proforma il cui PDF è stato spostato in "pagato" → segna saldata
+          let saldate = 0;
+          setInvoices(prev => prev.map(inv => {
+            if (!inv.pdfPath || inv.status === "pagato") return inv;
+            const fname = inv.pdfPath.split("/").pop().toLowerCase();
+            if (paidSet.has(fname)) {
+              saldate++;
+              return { ...inv, paid: inv.amount, status: "pagato",
+                payments: inv.amount>inv.paid ? [...inv.payments,{date:todayStr(),amount:inv.amount-inv.paid,method:"spostato in cartella pagato"}] : inv.payments };
+            }
+            return inv;
+          }));
+          if (saldate>0) addLog(`💚 ${saldate} proforma saldate (spostate in cartella pagato)`,"ok");
+
           let added=0, skipped=0;
           for (const item of pdfs) {
             if (existing.has(item.path)) { addLog(`↳ Già importato: ${item.name}`,"skip"); skipped++; continue; }
@@ -522,12 +552,27 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const TABS=[
         {id:"dashboard",label:"Dashboard", icon:"ti-layout-dashboard"},
         {id:"fatture",  label:"Proforma",  icon:"ti-file-invoice"},
+        {id:"clienti",  label:"Clienti",   icon:"ti-users"},
         {id:"pagamenti",label:"Pagamenti", icon:"ti-credit-card"},
         {id:"yandex",   label:"Archivio",  icon:"ti-cloud"},
         {id:"sync",     label:"Sync Auto", icon:"ti-refresh"},
         {id:"ai",       label:"AI Report", icon:"ti-sparkles"},
         {id:"ocr",      label:"Note OCR",  icon:"ti-scan"},
       ];
+
+      // Raggruppa proforma per cliente (anagrafica)
+      const clientiMap = (()=>{
+        const m = {};
+        invoices.forEach(inv=>{
+          const k = (inv.client||"Sconosciuto").trim();
+          if(!m[k]) m[k]={ name:k, invoices:[], totale:0, pagato:0, residuo:0 };
+          m[k].invoices.push(inv);
+          m[k].totale += inv.amount;
+          m[k].pagato += inv.paid;
+          m[k].residuo += (inv.amount - inv.paid);
+        });
+        return Object.values(m).sort((a,b)=>b.residuo-a.residuo);
+      })();
 
       const logC={info:"var(--color-text-secondary)",ok:C.green,error:C.red,skip:C.gray};
 
@@ -741,6 +786,60 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             </div>
           )}
 
+          {/* ══ CLIENTI (anagrafica) ══ */}
+          {tab==="clienti" && (
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                <h3 style={{margin:0,fontSize:14,fontWeight:500}}>Anagrafica clienti · {clientiMap.length}</h3>
+                <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>Totale da incassare: <b style={{color:C.amber}}>{fmt(residuo)}</b></span>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {clientiMap.map(cl=>{
+                  const aperte = cl.invoices.filter(i=>i.status!=="pagato");
+                  return (
+                  <div key={cl.name} style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden"}}>
+                    <div onClick={()=>setSelected(selected?.__cli===cl.name?null:{__cli:cl.name})} style={{display:"flex",alignItems:"center",gap:11,padding:"12px 14px",cursor:"pointer"}}>
+                      <div style={{width:38,height:38,borderRadius:10,background:cl.residuo>0?C.amberL:C.greenL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                        <i className={`ti ${cl.residuo>0?"ti-user-exclamation":"ti-user-check"}`} style={{fontSize:18,color:cl.residuo>0?C.amber:C.green}}/>
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{margin:"0 0 2px",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.name}</p>
+                        <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{cl.invoices.length} proforma · {aperte.length} aperte</p>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        {cl.residuo>0
+                          ? <p style={{margin:0,fontSize:15,fontWeight:600,color:C.amber}}>{fmt(cl.residuo)}</p>
+                          : <p style={{margin:0,fontSize:12,fontWeight:500,color:C.green}}><i className="ti ti-check"/> Saldato</p>}
+                        <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>su {fmt(cl.totale)}</p>
+                      </div>
+                      <i className={`ti ti-chevron-${selected?.__cli===cl.name?"down":"right"}`} style={{fontSize:15,color:"var(--color-text-secondary)"}}/>
+                    </div>
+                    {selected?.__cli===cl.name && (
+                      <div style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"8px 14px 12px"}}>
+                        {cl.invoices.sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).map(inv=>(
+                          <div key={inv.id} onClick={()=>{setSelected(inv);setTab("fatture");}} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer"}}>
+                            <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:STATUS[inv.status].bg,color:STATUS[inv.status].c,fontWeight:500}}>{STATUS[inv.status].label}</span>
+                            <span style={{fontSize:11,fontFamily:"monospace",color:C.gray}}>{inv.id}</span>
+                            <span style={{flex:1,fontSize:11,color:"var(--color-text-secondary)"}}>Scad. {inv.due?fmtD(inv.due):"—"}</span>
+                            <span style={{fontSize:12,fontWeight:500}}>{fmt(inv.amount)}</span>
+                            {inv.amount-inv.paid>0 && <span style={{fontSize:11,color:STATUS[inv.status].c}}>· res. {fmt(inv.amount-inv.paid)}</span>}
+                          </div>
+                        ))}
+                        <div style={{display:"flex",justifyContent:"flex-end",gap:14,marginTop:8,fontSize:12}}>
+                          <span style={{color:"var(--color-text-secondary)"}}>Tot: <b>{fmt(cl.totale)}</b></span>
+                          <span style={{color:C.green}}>Pagato: <b>{fmt(cl.pagato)}</b></span>
+                          <span style={{color:C.amber}}>Residuo: <b>{fmt(cl.residuo)}</b></span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  );
+                })}
+                {clientiMap.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:20}}>Nessun cliente. Importa proforma dalla sync.</p>}
+              </div>
+            </div>
+          )}
+
           {/* ══ PAGAMENTI ══ */}
           {tab==="pagamenti" && (
             <div>
@@ -882,6 +981,21 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
                     <i className={`ti ti-refresh ${syncStatus==="running"?"ti-spin":""}`}/>{syncStatus==="running"?"Sync in corso...":"Esegui sync ora"}
                   </button>
                   <button onClick={()=>{setSyncLog([]); LS.set("ced_sync_log",[]);}} style={{padding:"8px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Pulisci log</button>
+                </div>
+                <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap"}}>
+                  <button onClick={()=>{
+                    if(!confirm("Eliminare le 6 proforma di esempio (PRF-2025-001…006)?")) return;
+                    const sampleIds=["PRF-2025-001","PRF-2025-002","PRF-2025-003","PRF-2025-004","PRF-2025-005","PRF-2025-006"];
+                    setInvoices(p=>p.filter(i=>!sampleIds.includes(i.id))); setSelected(null);
+                  }} style={{padding:"7px 12px",background:C.amberL,color:C.amber,border:`1px solid ${C.amber}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
+                    <i className="ti ti-eraser"/> Cancella dati esempio
+                  </button>
+                  <button onClick={()=>{
+                    if(!confirm("ATTENZIONE: eliminare TUTTE le proforma e ripartire da zero? Operazione irreversibile.")) return;
+                    setInvoices([]); setSelected(null);
+                  }} style={{padding:"7px 12px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
+                    <i className="ti ti-trash"/> Svuota tutto
+                  </button>
                 </div>
                 {!ydToken && <p style={{margin:"8px 0 0",fontSize:11,color:C.red}}>⚠ Configura il token Yandex nella tab Archivio prima di usare la sync.</p>}
               </div>
