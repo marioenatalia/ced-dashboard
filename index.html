@@ -171,19 +171,25 @@
     const ydHeaders = t => ({ Authorization:`OAuth ${t}` });
 
     async function ydList(token, path="/") {
-      const r = await fetch(`${YD}/resources?path=${encodeURIComponent(path)}&limit=200&sort=name`, { headers:ydHeaders(token) });
+      const r = await fetchWithTimeout(`${YD}/resources?path=${encodeURIComponent(path)}&limit=200&sort=name`, 30000, { headers:ydHeaders(token) });
       if (!r.ok) { const e = await r.json().catch(()=>{}); throw new Error(e?.message || `Errore ${r.status}`); }
       return r.json();
     }
     async function ydDownloadUrl(token, path) {
-      const r = await fetch(`${YD}/resources/download?path=${encodeURIComponent(path)}`, { headers:ydHeaders(token) });
+      const r = await fetchWithTimeout(`${YD}/resources/download?path=${encodeURIComponent(path)}`, 30000, { headers:ydHeaders(token) });
       if (!r.ok) throw new Error(`Download URL: ${r.status}`);
       return (await r.json()).href;
     }
+    async function fetchWithTimeout(url, ms=45000, opts={}) {
+      const ctrl = new AbortController();
+      const t = setTimeout(()=>ctrl.abort(), ms);
+      try { return await fetch(url, {...opts, signal:ctrl.signal}); }
+      finally { clearTimeout(t); }
+    }
     async function fetchPdfBuffer(url) {
-      // Usa proxy dedicato su Render
+      // Usa proxy dedicato su Render (con timeout per evitare blocchi)
       const proxyUrl = "https://ced-proxy.onrender.com/proxy?url=" + encodeURIComponent(url);
-      const r = await fetch(proxyUrl);
+      const r = await fetchWithTimeout(proxyUrl, 45000);
       if (!r.ok) throw new Error("Download PDF fallito: " + r.status);
       return r.arrayBuffer();
     }
@@ -980,6 +986,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
                   <button onClick={runSync} disabled={syncStatus==="running"||!ydToken} style={{padding:"8px 18px",background:syncStatus==="running"?C.grayL:C.blue,color:syncStatus==="running"?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:syncStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
                     <i className={`ti ti-refresh ${syncStatus==="running"?"ti-spin":""}`}/>{syncStatus==="running"?"Sync in corso...":"Esegui sync ora"}
                   </button>
+                  {syncStatus==="running" && <button onClick={()=>setSyncStatus("idle")} style={{padding:"8px 14px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Annulla / Sblocca</button>}
                   <button onClick={()=>{setSyncLog([]); LS.set("ced_sync_log",[]);}} style={{padding:"8px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Pulisci log</button>
                 </div>
                 <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap"}}>
