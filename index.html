@@ -321,7 +321,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           const key  = LS.raw("ced_api_key");
           if (!key) throw new Error("API key Anthropic non configurata");
           const raw = await (async()=>{
-            const body = { model:"claude-sonnet-4-20250514", max_tokens:1200, messages:[{ role:"user", content:[
+            const body = { model:"claude-opus-4-5", max_tokens:1200, messages:[{ role:"user", content:[
               { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
               { type:"text", text:`Sei un assistente contabile italiano. Analizza questo PDF.\nRispondi SOLO con JSON valido:\n{"tipo":"proforma|fattura|nota_credito|sconosciuto","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"...","indirizzo":"..."},"importo_totale":0.00,"importo_iva":0.00,"importo_imponibile":0.00,"righe":[{"descrizione":"...","quantita":0,"prezzo_unitario":0,"totale":0}],"note":"...","stato_pagamento":"non_pagato|parziale|pagato|sconosciuto","metodo_pagamento_indicato":"...","affidabilita_estrazione":"alta|media|bassa","note_ocr":"..."}` }
             ]}] };
