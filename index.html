@@ -356,17 +356,40 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         setTab("fatture"); setSelected(newInv);
       };
 
+      // Scansione ricorsiva: raccoglie tutti i PDF, esclude cartelle "pagato/pagati/saldato"
+      const EXCLUDE_DIRS = ["pagato","pagati","pagate","saldato","saldati","archivio pagati"];
+      const isExcludedDir = name => {
+        const n = (name||"").toLowerCase().trim();
+        return EXCLUDE_DIRS.some(x=>n===x || n.includes(x));
+      };
+      const walkFolderForPdfs = async (token, path, addLog, depth=0) => {
+        if (depth > 6) return [];                 // safety anti-loop
+        let pdfs = [];
+        const data  = await ydList(token, path);
+        const items = data._embedded?.items || [];
+        for (const it of items) {
+          if (it.type === "dir") {
+            if (isExcludedDir(it.name)) { addLog(`  ⊘ Salto cartella "pagato": ${it.path}`,"skip"); continue; }
+            const sub = await walkFolderForPdfs(token, it.path, addLog, depth+1);
+            pdfs = pdfs.concat(sub);
+          } else if (it.type === "file" && it.name.toLowerCase().endsWith(".pdf")) {
+            pdfs.push(it);
+          }
+        }
+        return pdfs;
+      };
+
       const runSync = useCallback(async()=>{
         if (!ydToken) { setYdError("Token Yandex mancante"); return; }
         setSyncStatus("running");
         const log = [];
         const addLog = (msg,type="info")=>{ log.push({msg,type,ts:new Date().toLocaleTimeString("it-IT")}); setSyncLog([...log]); };
-        addLog(`Avvio sync cartella: ${ydSyncPath}`);
+        addLog(`Avvio sync ricorsiva da: ${ydSyncPath}`);
         try {
           const existing = new Set(invoices.map(i=>i.pdfPath).filter(Boolean));
-          const data     = await ydList(ydToken, ydSyncPath);
-          const pdfs     = (data._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
-          addLog(`Trovati ${pdfs.length} PDF nella cartella`);
+          addLog(`Scansione sottocartelle in corso...`);
+          const pdfs = await walkFolderForPdfs(ydToken, ydSyncPath, addLog);
+          addLog(`Trovati ${pdfs.length} PDF (escluse cartelle pagato)`);
           let added=0, skipped=0;
           for (const item of pdfs) {
             if (existing.has(item.path)) { addLog(`↳ Già importato: ${item.name}`,"skip"); skipped++; continue; }
@@ -376,21 +399,30 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
               const b64  = bufToB64(buf);
               const d    = await callAIWithKey([{ role:"user", content:[
                 { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
-                { type:"text", text:`Analizza questo PDF contabile. Rispondi SOLO JSON: {"tipo":"...","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"..."},"importo_totale":0.00,"note":"...","affidabilita_estrazione":"alta|media|bassa"}` }
-              ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/```json|```/g,"").trim()); } catch { return { parse_error:true }; } });
+                { type:"text", text:`Sei un contabile italiano. Analizza questa proforma/fattura PDF, incluse eventuali NOTE MANOSCRITTE o timbri (es. "acconto 2.000€", "pagato parziale", "saldo entro 30/06"). Rispondi SOLO con JSON valido:
+{"tipo":"proforma|fattura|nota_credito|sconosciuto","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"..."},"importo_totale":0.00,"importo_gia_pagato":0.00,"stato_pagamento":"non_pagato|parziale|pagato|sconosciuto","note":"trascrivi qui eventuali note/acconti trovati","affidabilita_estrazione":"alta|media|bassa"}
+REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 se nessuno). Se la proforma risulta totalmente pagata metti importo_gia_pagato = importo_totale.` }
+              ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return { parse_error:true }; } });
               if (d.parse_error) { addLog(`  ✗ Parse fallito: ${item.name}`,"error"); continue; }
-              const id = d.numero || `PRF-SYNC-${Date.now()}-${added}`;
+              const id     = d.numero || `PRF-SYNC-${Date.now()}-${added}`;
+              const amount = d.importo_totale || 0;
+              const paid   = Math.min(d.importo_gia_pagato || 0, amount);   // residuo = amount - paid
+              const status = paid >= amount && amount > 0 ? "pagato"
+                           : paid > 0 ? "parziale"
+                           : (d.stato_pagamento === "pagato" ? "pagato" : "attesa");
+              const payments = paid > 0 ? [{date:todayStr(),amount:paid,method:"da nota PDF"}] : [];
               const newInv = {
                 id, client:d.cliente?.ragione_sociale||item.name.replace(".pdf",""),
-                amount:d.importo_totale||0, paid:0,
+                amount, paid,
                 date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
-                status:"attesa",
+                status,
                 notes:d.note?[{text:d.note,author:"Sync auto",scanned:d.affidabilita_estrazione==="bassa"}]:[],
-                payments:[], pdfPath:item.path, syncedAt:now(),
+                payments, pdfPath:item.path, syncedAt:now(),
               };
               setBlobMap(m=>({...m,[id]:{ url, name }}));
               setInvoices(p=>[newInv,...p.filter(i=>i.id!==id)]);
-              addLog(`  ✓ Importato: ${d.cliente?.ragione_sociale||id} — ${fmt(d.importo_totale||0)}`,"ok");
+              const resid = amount - paid;
+              addLog(`  ✓ ${d.cliente?.ragione_sociale||id} — Tot ${fmt(amount)}${paid>0?` · Pagato ${fmt(paid)} · Residuo ${fmt(resid)}`:""}`,"ok");
               added++;
             } catch(e) { addLog(`  ✗ Errore ${item.name}: ${e.message}`,"error"); }
           }
@@ -837,7 +869,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
                       </div>
                       <span style={{fontSize:12,color:autoSync?C.green:C.gray,fontWeight:500}}>{autoSync?"Attiva":"Disattiva"}</span>
                     </label>
-                    <p style={{margin:"6px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Controlla ogni ora, importa i nuovi PDF dalla cartella "{ydSyncPath}" una volta al giorno</p>
+                    <p style={{margin:"6px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Scansione ricorsiva di "{ydSyncPath}" e sottocartelle (escluse le cartelle "pagato"). Legge note/acconti e calcola il residuo. Controllo ogni ora, una volta al giorno.</p>
                   </div>
                   <div style={{padding:"10px 14px",background:C.blueL,borderRadius:10,border:`1px solid ${C.blue}22`}}>
                     <p style={{margin:"0 0 2px",fontSize:11,fontWeight:500,color:C.blue}}>ULTIMA SYNC</p>
