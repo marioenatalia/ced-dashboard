@@ -181,8 +181,14 @@
       return (await r.json()).href;
     }
     async function fetchPdfBuffer(url) {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error("Download PDF fallito");
+      // Usa proxy CORS per evitare blocchi browser
+      const proxy = "https://corsproxy.io/?" + encodeURIComponent(url);
+      let r = await fetch(proxy);
+      if (!r.ok) {
+        // fallback diretto
+        r = await fetch(url);
+        if (!r.ok) throw new Error("Download PDF fallito");
+      }
       return r.arrayBuffer();
     }
     function bufToB64(buf) {
