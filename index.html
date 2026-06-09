@@ -276,6 +276,12 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [syncLog, setSyncLog]       = useState(()=>LS.get("ced_sync_log",[]));
       const [lastSync, setLastSync]     = useState(()=>LS.raw("ced_last_sync"));
       const [autoSync, setAutoSync]     = useState(()=>LS.get("ced_auto_sync",false));
+      // Anagrafica da cartelle (veloce, senza AI)
+      const [folderClients, setFolderClients] = useState(()=>LS.get("ced_folder_clients",[]));
+      const [scanStatus, setScanStatus] = useState("idle");
+      const [excludeEx, setExcludeEx]   = useState(()=>LS.get("ced_exclude_ex",true));
+      const [cliFilter, setCliFilter]   = useState("");
+      const [cliAiLoading, setCliAiLoading] = useState(null);
 
       const totale    = invoices.reduce((s,i)=>s+i.amount,0);
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
@@ -472,6 +478,97 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           setSyncStatus("error");
         }
       }, [ydToken, ydSyncPath, invoices]);
+
+      // ── SCANSIONE ANAGRAFICA (veloce, senza AI) ──
+      // Costruisce la lista clienti dai nomi cartella: conta proforma aperte vs pagate.
+      const scanRef = useRef({ stop:false });
+      const scanAnagrafica = useCallback(async()=>{
+        if (!ydToken) { setYdError("Token Yandex mancante"); return; }
+        setScanStatus("running");
+        scanRef.current.stop = false;
+        const log = [];
+        const addLog = (msg,type="info")=>{ log.push({msg,type,ts:new Date().toLocaleTimeString("it-IT")}); setSyncLog([...log]); };
+        addLog(`Avvio scansione anagrafica da: ${ydSyncPath}`);
+        const found = {};            // name -> {name, path, open, paid}
+        const pushClient = (name, path, open, paid)=>{
+          const key = name.trim();
+          if (!found[key]) found[key] = { name:key, path, open:0, paid:0 };
+          found[key].open += open; found[key].paid += paid;
+          // aggiorna stato live (ordina per aperte desc)
+          const arr = Object.values(found).filter(c=>c.open>0||c.paid>0).sort((a,b)=>b.open-a.open||a.name.localeCompare(b.name));
+          setFolderClients(arr);
+        };
+        const countPdfsInDir = async (path)=>{
+          try { const d = await ydList(ydToken, path); return (d._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf")).length; }
+          catch { return 0; }
+        };
+        const basename = p => p.replace(/\/+$/,"").split("/").pop();
+        // scansione: ogni cartella che contiene PDF o una sottocartella PAGATO = cliente
+        const scan = async (path, depth)=>{
+          if (scanRef.current.stop || depth>5) return;
+          let data; try { data = await ydList(ydToken, path); } catch(e){ return; }
+          const items = data._embedded?.items || [];
+          const pdfsHere  = items.filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
+          const pagatoDirs= items.filter(it=>it.type==="dir"&&isExcludedDir(it.name));
+          const otherDirs = items.filter(it=>it.type==="dir"&&!isExcludedDir(it.name));
+          // questa cartella è un "cliente"?
+          if (pdfsHere.length>0 || pagatoDirs.length>0) {
+            let paid=0;
+            for (const pd of pagatoDirs) { if(scanRef.current.stop) return; paid += await countPdfsInDir(pd.path); }
+            const name = basename(path);
+            pushClient(name, path, pdfsHere.length, paid);
+            if (pdfsHere.length>0) addLog(`👤 ${name}: ${pdfsHere.length} aperte · ${paid} pagate`, pdfsHere.length>0?"ok":"info");
+          }
+          // continua nelle sottocartelle non-pagato (categorie + sub-clienti)
+          for (const d of otherDirs) {
+            if (scanRef.current.stop) return;
+            // escludi ramo EX CLIENTI se richiesto
+            if (excludeEx && /ex\s*clienti/i.test(d.name)) { addLog(`⊘ Salto ramo: ${d.name}`,"skip"); continue; }
+            await scan(d.path, depth+1);
+          }
+        };
+        try {
+          await scan(ydSyncPath, 0);
+          const arr = Object.values(found).filter(c=>c.open>0||c.paid>0).sort((a,b)=>b.open-a.open||a.name.localeCompare(b.name));
+          setFolderClients(arr);
+          LS.set("ced_folder_clients", arr);
+          const totOpen = arr.reduce((s,c)=>s+c.open,0);
+          addLog(`Anagrafica completata: ${arr.length} clienti · ${totOpen} proforma aperte`, "ok");
+          LS.set("ced_sync_log", log);
+          LS.setRaw("ced_last_sync", now()); setLastSync(now());
+          setScanStatus(scanRef.current.stop?"idle":"done");
+        } catch(e) { addLog(`Errore scansione: ${e.message}`,"error"); setScanStatus("error"); }
+      }, [ydToken, ydSyncPath, excludeEx]);
+
+      // Legge con AI gli importi delle proforma aperte di UN cliente (on-demand)
+      const readClientAmounts = useCallback(async(cli)=>{
+        if (!ydToken) return;
+        setCliAiLoading(cli.name);
+        try {
+          const data = await ydList(ydToken, cli.path);
+          const pdfs = (data._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
+          for (const item of pdfs) {
+            try {
+              const { buf, url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
+              const b64 = bufToB64(buf);
+              const d = await callAIWithKey([{ role:"user", content:[
+                { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+                { type:"text", text:`Contabile italiano. Estrai dalla proforma. SOLO JSON: {"numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","importo_totale":0.00,"importo_gia_pagato":0.00,"note":"acconti/note se presenti"}` }
+              ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return null; } });
+              if (!d) continue;
+              const id = d.numero || `${cli.name}-${item.name}`;
+              const amount = d.importo_totale||0;
+              const paid = Math.min(d.importo_gia_pagato||0, amount);
+              const status = paid>=amount&&amount>0?"pagato":paid>0?"parziale":"attesa";
+              const newInv = { id, client:cli.name, amount, paid, date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
+                status, notes:d.note?[{text:d.note,author:"AI",scanned:false}]:[], payments:paid>0?[{date:todayStr(),amount:paid,method:"da nota PDF"}]:[], pdfPath:item.path, syncedAt:now() };
+              setBlobMap(m=>({...m,[id]:{url,name}}));
+              setInvoices(p=>[newInv,...p.filter(i=>i.id!==id)]);
+            } catch(e){}
+          }
+        } catch(e) { setYdError("Errore lettura importi: "+e.message); }
+        setCliAiLoading(null);
+      }, [ydToken]);
 
       const ydBrowse = useCallback(async(path, token)=>{
         const t=token||ydToken; if(!t) return;
@@ -792,57 +889,82 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             </div>
           )}
 
-          {/* ══ CLIENTI (anagrafica) ══ */}
+          {/* ══ CLIENTI (anagrafica da cartelle) ══ */}
           {tab==="clienti" && (
             <div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-                <h3 style={{margin:0,fontSize:14,fontWeight:500}}>Anagrafica clienti · {clientiMap.length}</h3>
-                <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>Totale da incassare: <b style={{color:C.amber}}>{fmt(residuo)}</b></span>
-              </div>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {clientiMap.map(cl=>{
-                  const aperte = cl.invoices.filter(i=>i.status!=="pagato");
-                  return (
-                  <div key={cl.name} style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden"}}>
-                    <div onClick={()=>setSelected(selected?.__cli===cl.name?null:{__cli:cl.name})} style={{display:"flex",alignItems:"center",gap:11,padding:"12px 14px",cursor:"pointer"}}>
-                      <div style={{width:38,height:38,borderRadius:10,background:cl.residuo>0?C.amberL:C.greenL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                        <i className={`ti ${cl.residuo>0?"ti-user-exclamation":"ti-user-check"}`} style={{fontSize:18,color:cl.residuo>0?C.amber:C.green}}/>
-                      </div>
-                      <div style={{flex:1,minWidth:0}}>
-                        <p style={{margin:"0 0 2px",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.name}</p>
-                        <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{cl.invoices.length} proforma · {aperte.length} aperte</p>
-                      </div>
-                      <div style={{textAlign:"right"}}>
-                        {cl.residuo>0
-                          ? <p style={{margin:0,fontSize:15,fontWeight:600,color:C.amber}}>{fmt(cl.residuo)}</p>
-                          : <p style={{margin:0,fontSize:12,fontWeight:500,color:C.green}}><i className="ti ti-check"/> Saldato</p>}
-                        <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>su {fmt(cl.totale)}</p>
-                      </div>
-                      <i className={`ti ti-chevron-${selected?.__cli===cl.name?"down":"right"}`} style={{fontSize:15,color:"var(--color-text-secondary)"}}/>
-                    </div>
-                    {selected?.__cli===cl.name && (
-                      <div style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"8px 14px 12px"}}>
-                        {cl.invoices.sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).map(inv=>(
-                          <div key={inv.id} onClick={()=>{setSelected(inv);setTab("fatture");}} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer"}}>
-                            <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:STATUS[inv.status].bg,color:STATUS[inv.status].c,fontWeight:500}}>{STATUS[inv.status].label}</span>
-                            <span style={{fontSize:11,fontFamily:"monospace",color:C.gray}}>{inv.id}</span>
-                            <span style={{flex:1,fontSize:11,color:"var(--color-text-secondary)"}}>Scad. {inv.due?fmtD(inv.due):"—"}</span>
-                            <span style={{fontSize:12,fontWeight:500}}>{fmt(inv.amount)}</span>
-                            {inv.amount-inv.paid>0 && <span style={{fontSize:11,color:STATUS[inv.status].c}}>· res. {fmt(inv.amount-inv.paid)}</span>}
-                          </div>
-                        ))}
-                        <div style={{display:"flex",justifyContent:"flex-end",gap:14,marginTop:8,fontSize:12}}>
-                          <span style={{color:"var(--color-text-secondary)"}}>Tot: <b>{fmt(cl.totale)}</b></span>
-                          <span style={{color:C.green}}>Pagato: <b>{fmt(cl.pagato)}</b></span>
-                          <span style={{color:C.amber}}>Residuo: <b>{fmt(cl.residuo)}</b></span>
-                        </div>
-                      </div>
-                    )}
+              {folderClients.length>0 ? (()=>{
+                const q = cliFilter.trim().toLowerCase();
+                const list = q ? folderClients.filter(c=>c.name.toLowerCase().includes(q)) : folderClients;
+                const totApe = folderClients.reduce((s,c)=>s+c.open,0);
+                const conAperte = folderClients.filter(c=>c.open>0).length;
+                return (<>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
+                    <div style={{background:C.blueL,borderRadius:10,padding:"10px 12px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.blue,fontWeight:500}}>CLIENTI</p><p style={{margin:0,fontSize:19,fontWeight:600,color:C.blue}}>{folderClients.length}</p></div>
+                    <div style={{background:C.amberL,borderRadius:10,padding:"10px 12px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.amber,fontWeight:500}}>CON APERTE</p><p style={{margin:0,fontSize:19,fontWeight:600,color:C.amber}}>{conAperte}</p></div>
+                    <div style={{background:C.purpleL,borderRadius:10,padding:"10px 12px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.purple,fontWeight:500}}>PROFORMA APERTE</p><p style={{margin:0,fontSize:19,fontWeight:600,color:C.purple}}>{totApe}</p></div>
                   </div>
-                  );
-                })}
-                {clientiMap.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:20}}>Nessun cliente. Importa proforma dalla sync.</p>}
-              </div>
+                  <input value={cliFilter} onChange={e=>setCliFilter(e.target.value)} placeholder="🔍 Cerca cliente..." style={{width:"100%",padding:"8px 12px",borderRadius:9,border:"0.5px solid var(--color-border-secondary)",fontSize:13,marginBottom:10,boxSizing:"border-box"}}/>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {list.map(cl=>{
+                      const invs = invoices.filter(i=>i.client===cl.name);
+                      const resid = invs.reduce((s,i)=>s+(i.amount-i.paid),0);
+                      const totEuro = invs.reduce((s,i)=>s+i.amount,0);
+                      const open = selected?.__cli===cl.name;
+                      return (
+                      <div key={cl.name} style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:11,overflow:"hidden"}}>
+                        <div onClick={()=>setSelected(open?null:{__cli:cl.name})} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",cursor:"pointer"}}>
+                          <div style={{width:34,height:34,borderRadius:9,background:cl.open>0?C.amberL:C.greenL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                            <i className={`ti ${cl.open>0?"ti-user-exclamation":"ti-user-check"}`} style={{fontSize:16,color:cl.open>0?C.amber:C.green}}/>
+                          </div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{margin:"0 0 2px",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.name}</p>
+                            <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>
+                              <span style={{color:cl.open>0?C.amber:"inherit"}}>{cl.open} aperte</span> · {cl.paid} pagate
+                              {totEuro>0 && <span> · {fmt(totEuro)}</span>}
+                            </p>
+                          </div>
+                          {resid>0 && <span style={{fontSize:13,fontWeight:600,color:C.amber}}>{fmt(resid)}</span>}
+                          <i className={`ti ti-chevron-${open?"down":"right"}`} style={{fontSize:14,color:"var(--color-text-secondary)"}}/>
+                        </div>
+                        {open && (
+                          <div style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"10px 13px"}}>
+                            {invs.length===0 ? (
+                              <div style={{textAlign:"center"}}>
+                                <p style={{margin:"0 0 8px",fontSize:11,color:"var(--color-text-secondary)"}}>Importi non ancora letti per questo cliente.</p>
+                                <button onClick={()=>readClientAmounts(cl)} disabled={cliAiLoading===cl.name} style={{padding:"7px 14px",background:cliAiLoading===cl.name?C.grayL:C.blue,color:cliAiLoading===cl.name?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500,display:"inline-flex",alignItems:"center",gap:5}}>
+                                  {cliAiLoading===cl.name?<><i className="ti ti-loader-2 ti-spin"/>Lettura AI in corso...</>:<><i className="ti ti-sparkles"/>Leggi importi con AI ({cl.open} PDF)</>}
+                                </button>
+                              </div>
+                            ) : (<>
+                              {invs.sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).map(inv=>(
+                                <div key={inv.id} onClick={()=>{setSelected(inv);setTab("fatture");}} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer"}}>
+                                  <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:STATUS[inv.status].bg,color:STATUS[inv.status].c,fontWeight:500}}>{STATUS[inv.status].label}</span>
+                                  <span style={{flex:1,fontSize:11,color:"var(--color-text-secondary)"}}>Scad. {inv.due?fmtD(inv.due):"—"}</span>
+                                  <span style={{fontSize:12,fontWeight:500}}>{fmt(inv.amount)}</span>
+                                  {inv.amount-inv.paid>0 && <span style={{fontSize:11,color:STATUS[inv.status].c}}>· res. {fmt(inv.amount-inv.paid)}</span>}
+                                </div>
+                              ))}
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                                <button onClick={()=>readClientAmounts(cl)} disabled={cliAiLoading===cl.name} style={{padding:"5px 10px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer"}}>{cliAiLoading===cl.name?"Aggiorno...":"↻ Rileggi importi"}</button>
+                                <span style={{fontSize:12,color:C.amber}}>Residuo: <b>{fmt(resid)}</b></span>
+                              </div>
+                            </>)}
+                          </div>
+                        )}
+                      </div>
+                      );
+                    })}
+                    {list.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:20}}>Nessun cliente trovato per "{cliFilter}".</p>}
+                  </div>
+                </>);
+              })() : (
+                <div style={{textAlign:"center",padding:"40px 20px"}}>
+                  <i className="ti ti-users" style={{fontSize:36,color:"var(--color-text-secondary)",opacity:.4}}/>
+                  <p style={{margin:"12px 0 4px",fontSize:14,fontWeight:500}}>Anagrafica vuota</p>
+                  <p style={{margin:"0 0 14px",fontSize:12,color:"var(--color-text-secondary)"}}>Lancia la <b>Scansione anagrafica</b> dalla tab Sync Auto per costruire la lista clienti dalle cartelle Yandex (veloce, senza AI).</p>
+                  <button onClick={()=>setTab("sync")} style={{padding:"8px 16px",background:C.teal,color:"white",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Vai a Sync Auto</button>
+                </div>
+              )}
             </div>
           )}
 
@@ -982,12 +1104,21 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
                     <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Prossima: {autoSync&&lastSync?new Date(new Date(lastSync.split("T")[0]+"T00:00:00").getTime()+86400000).toLocaleDateString("it-IT"):"—"}</p>
                   </div>
                 </div>
-                <div style={{display:"flex",gap:7}}>
-                  <button onClick={runSync} disabled={syncStatus==="running"||!ydToken} style={{padding:"8px 18px",background:syncStatus==="running"?C.grayL:C.blue,color:syncStatus==="running"?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:syncStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
-                    <i className={`ti ti-refresh ${syncStatus==="running"?"ti-spin":""}`}/>{syncStatus==="running"?"Sync in corso...":"Esegui sync ora"}
+                <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={scanAnagrafica} disabled={scanStatus==="running"||!ydToken} style={{padding:"8px 18px",background:scanStatus==="running"?C.grayL:C.teal,color:scanStatus==="running"?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:scanStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+                    <i className={`ti ti-users ${scanStatus==="running"?"ti-spin":""}`}/>{scanStatus==="running"?"Scansione in corso...":"Scansiona anagrafica (veloce)"}
                   </button>
-                  {syncStatus==="running" && <button onClick={()=>setSyncStatus("idle")} style={{padding:"8px 14px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Annulla / Sblocca</button>}
-                  <button onClick={()=>{setSyncLog([]); LS.set("ced_sync_log",[]);}} style={{padding:"8px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Pulisci log</button>
+                  {scanStatus==="running" && <button onClick={()=>{scanRef.current.stop=true; setScanStatus("idle");}} style={{padding:"8px 14px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Stop</button>}
+                  <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--color-text-secondary)",cursor:"pointer"}}>
+                    <input type="checkbox" checked={excludeEx} onChange={e=>{setExcludeEx(e.target.checked); LS.set("ced_exclude_ex",e.target.checked);}}/> Escludi "EX CLIENTI"
+                  </label>
+                </div>
+                <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={runSync} disabled={syncStatus==="running"||!ydToken} style={{padding:"7px 14px",background:"transparent",color:C.blue,border:`1px solid ${C.blue}55`,borderRadius:8,fontSize:12,cursor:syncStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
+                    <i className={`ti ti-sparkles ${syncStatus==="running"?"ti-spin":""}`}/>{syncStatus==="running"?"AI in corso...":"Lettura AI completa (lenta)"}
+                  </button>
+                  {syncStatus==="running" && <button onClick={()=>setSyncStatus("idle")} style={{padding:"7px 14px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Annulla / Sblocca</button>}
+                  <button onClick={()=>{setSyncLog([]); LS.set("ced_sync_log",[]);}} style={{padding:"7px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Pulisci log</button>
                 </div>
                 <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap"}}>
                   <button onClick={()=>{
