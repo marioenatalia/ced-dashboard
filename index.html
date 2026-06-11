@@ -635,6 +635,64 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         setCliAiLoading(null);
       }, [ydToken]);
 
+      // ── LETTURA MASSIVA: legge gli importi delle proforma "da pagare" di TUTTI i clienti ──
+      const readAllRef = useRef({ stop:false });
+      const [readAllStatus, setReadAllStatus] = useState("idle"); // idle|running|done
+      const [readAllProg, setReadAllProg]     = useState({done:0,total:0,cli:""});
+      const readAllAmounts = useCallback(async()=>{
+        if (!ydToken) { setYdError("Token Yandex mancante"); return; }
+        if (!LS.raw("ced_api_key")) { setYdError("API key Anthropic non configurata"); return; }
+        const clients = folderClients.filter(c=>c.open>0);
+        if (clients.length===0) { setYdError("Nessun cliente con proforma da pagare. Lancia prima la scansione anagrafica."); return; }
+        const totalPdf = clients.reduce((s,c)=>s+c.open,0);
+        if (!confirm(`Leggere con AI gli importi di ${totalPdf} proforma da pagare (${clients.length} clienti)?\nPuoi fermare in qualsiasi momento; le già lette vengono saltate.`)) return;
+        setReadAllStatus("running"); readAllRef.current.stop=false;
+        const log=[]; const addLog=(m,t="info")=>{log.push({msg:m,type:t,ts:new Date().toLocaleTimeString("it-IT")}); setSyncLog([...log]);};
+        addLog(`Lettura massiva importi: ${totalPdf} proforma da ${clients.length} clienti`);
+        let doneClients=0, read=0, skip=0;
+        // set per saltare quelle già lette (per pdfPath)
+        let existing = new Set(invoices.map(i=>i.pdfPath).filter(Boolean));
+        for (const cli of clients) {
+          if (readAllRef.current.stop) { addLog("⏹ Interrotto dall'utente","skip"); break; }
+          setReadAllProg({done:doneClients, total:clients.length, cli:cli.name});
+          try {
+            const data = await ydList(ydToken, cli.path);
+            const pdfs = (data._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
+            for (const item of pdfs) {
+              if (readAllRef.current.stop) break;
+              if (existing.has(item.path)) { skip++; continue; }
+              try {
+                const { buf, url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
+                const b64 = bufToB64(buf);
+                const d = await callAIWithKey([{ role:"user", content:[
+                  { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+                  { type:"text", text:`Contabile italiano. Estrai dalla proforma. SOLO JSON: {"numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","importo_totale":0.00,"importo_gia_pagato":0.00,"note":"acconti/note se presenti"}` }
+                ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return null; } });
+                if (!d) { addLog(`  ✗ ${cli.name}: parse fallito ${item.name}`,"error"); continue; }
+                const id=d.numero||`${cli.name}-${item.name}`;
+                const amount=d.importo_totale||0;
+                const paid=Math.min(d.importo_gia_pagato||0,amount);
+                const due=d.data_scadenza||"";
+                const status=effStatus({amount,paid,due,status:"attesa"});
+                const newInv={ id, client:cli.name, amount, paid, date:d.data_emissione||todayStr(), due, status,
+                  notes:d.note?[{text:d.note,author:"AI massivo",scanned:false}]:[], payments:paid>0?[{date:todayStr(),amount:paid,method:"da nota PDF"}]:[], pdfPath:item.path, syncedAt:now() };
+                setBlobMap(m=>({...m,[id]:{url,name}}));
+                setInvoices(p=>[newInv,...p.filter(i=>i.id!==id)]);
+                existing.add(item.path);
+                read++;
+              } catch(e){ addLog(`  ✗ ${cli.name}: ${e.message}`,"error"); }
+            }
+            const od=overdueDays; // log riassunto cliente
+            addLog(`✓ ${cli.name} (${pdfs.length} file)`, "ok");
+          } catch(e){ addLog(`✗ ${cli.name}: ${e.message}`,"error"); }
+          doneClients++;
+        }
+        setReadAllProg({done:doneClients, total:clients.length, cli:""});
+        addLog(`Lettura massiva completata: ${read} lette, ${skip} già presenti`,"ok");
+        LS.set("ced_sync_log", log);
+        setReadAllStatus("done");
+      }, [ydToken, folderClients, invoices]);
+
       // Carica l'elenco dei PDF di un cliente: "da pagare" (cartella) + "pagate" (sottocartelle PAGATO)
       const loadClientFiles = useCallback(async(cli)=>{
         if (!ydToken) return;
@@ -1243,6 +1301,15 @@ In italiano, con numeri ed euro.`,
                     <input type="checkbox" checked={excludeEx} onChange={e=>{setExcludeEx(e.target.checked); LS.set("ced_exclude_ex",e.target.checked);}}/> Escludi "EX CLIENTI"
                   </label>
                 </div>
+                {/* Lettura massiva importi */}
+                <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={readAllAmounts} disabled={readAllStatus==="running"||!ydToken||folderClients.length===0} style={{padding:"8px 16px",background:readAllStatus==="running"?C.grayL:C.purple,color:readAllStatus==="running"?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:(readAllStatus==="running"||folderClients.length===0)?"not-allowed":"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+                    <i className={`ti ti-sparkles ${readAllStatus==="running"?"ti-spin":""}`}/>{readAllStatus==="running"?"Lettura importi...":"Leggi importi di TUTTI (da pagare)"}
+                  </button>
+                  {readAllStatus==="running" && <button onClick={()=>{readAllRef.current.stop=true; setReadAllStatus("idle");}} style={{padding:"8px 14px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Stop</button>}
+                  {readAllStatus==="running" && readAllProg.total>0 && <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{readAllProg.done}/{readAllProg.total} clienti · {readAllProg.cli}</span>}
+                </div>
+                {folderClients.length===0 && <p style={{margin:"6px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Per la lettura massiva, esegui prima la <b>Scansione anagrafica</b>.</p>}
                 <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
                   <button onClick={runSync} disabled={syncStatus==="running"||!ydToken} style={{padding:"7px 14px",background:"transparent",color:C.blue,border:`1px solid ${C.blue}55`,borderRadius:8,fontSize:12,cursor:syncStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:5}}>
                     <i className={`ti ti-sparkles ${syncStatus==="running"?"ti-spin":""}`}/>{syncStatus==="running"?"AI in corso...":"Lettura AI completa (lenta)"}
