@@ -8,6 +8,7 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
@@ -824,12 +825,128 @@ In italiano, con numeri ed euro.`,
         setOcrLoading(false);
       };
 
-      const exportCSV=()=>{
-        const rows=[["ID","Cliente","Importo","Pagato","Residuo","Scadenza","Stato","PDF path","Sincronizzato","Note"],
-          ...invoices.map(i=>[i.id,i.client,i.amount,i.paid,i.amount-i.paid,i.due||"",i.status,i.pdfPath||"",i.syncedAt||"",i.notes.map(n=>n.text).join("; ")])];
-        const csv=rows.map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
-        const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8;"})); a.download="proforma_CED.csv"; a.click();
+      const classeCredito = inv => {
+        if (inv.status==="pagato" || (inv.amount>0 && inv.paid>=inv.amount)) return "Pagato";
+        const d = daysOverdue(inv);
+        if (d==null || d<=0) return inv.paid>0 ? "Parziale" : "In attesa";
+        if (d>730) return "Storico >24m";
+        return "Scaduto";
       };
+
+      const exportExcel = async () => {
+        if (!window.ExcelJS) { alert("Libreria Excel non ancora caricata, riprova tra un secondo."); return; }
+        const EUR = '#,##0.00\\ "€"';
+        const wb = new ExcelJS.Workbook();
+        wb.creator = "FocusData CED"; wb.created = new Date();
+        const C_HEAD = "FF185FA5", C_HEADTXT = "FFFFFFFF";
+        const tint = { Pagato:"FFEAF3DE", "In attesa":"FFE6F1FB", Parziale:"FFFAEEDA", Scaduto:"FFFCEBEB", "Storico >24m":"FFFAECE7" };
+        const tcol = { Pagato:"FF3B6D11", "In attesa":"FF185FA5", Parziale:"FFBA7517", Scaduto:"FFA32D2D", "Storico >24m":"FF993C1D" };
+        const thin = { style:"thin", color:{argb:"FFE0DED7"} };
+        const borderAll = { top:thin, left:thin, bottom:thin, right:thin };
+
+        const styleHeader = (ws, row, ncols) => {
+          row.height = 22;
+          for (let c=1;c<=ncols;c++){ const cell=row.getCell(c);
+            cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:C_HEAD}};
+            cell.font={bold:true,color:{argb:C_HEADTXT},size:11,name:"Calibri"};
+            cell.alignment={vertical:"middle",horizontal:"center"};
+            cell.border=borderAll;
+          }
+        };
+
+        // ── Foglio 1: RIEPILOGO ──
+        const ws1 = wb.addWorksheet("Riepilogo", { properties:{ defaultRowHeight:18 }, views:[{showGridLines:false}] });
+        ws1.mergeCells("A1:D1");
+        const t1 = ws1.getCell("A1"); t1.value="FocusData · Monitor Pagamenti CED"; t1.font={bold:true,size:16,color:{argb:C_HEAD}};
+        ws1.mergeCells("A2:D2");
+        const t2 = ws1.getCell("A2"); t2.value=`Report generato il ${new Date().toLocaleString("it-IT")}`; t2.font={italic:true,size:10,color:{argb:"FF7A7A7A"}};
+        ws1.addRow([]);
+        const kpis = [
+          ["Fatturato totale", totale],
+          ["Incassato", incassato],
+          ["Residuo da incassare", residuo],
+          ["di cui Scaduto (1-24 mesi)", scadutiV],
+          ["di cui Storico >24 mesi", storicoV],
+          ["N. proforma storiche >24m", storicoN],
+          ["N. proforma totali", invoices.length],
+          ["Tasso di incasso", totale>0?incassato/totale:0],
+        ];
+        let r = 4;
+        kpis.forEach(([k,v],i)=>{
+          const row = ws1.getRow(r++);
+          row.getCell(1).value=k; row.getCell(1).font={bold:true,size:11};
+          const vc = row.getCell(2); vc.value=v;
+          const isPct = k.startsWith("Tasso"); const isCount = k.startsWith("N.");
+          vc.numFmt = isPct ? "0%" : isCount ? "0" : EUR;
+          vc.font={size:11,bold:true,color:{argb:i>=3&&i<=4?"FFA32D2D":"FF185FA5"}};
+          vc.alignment={horizontal:"right"};
+          row.getCell(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:(r%2)?"FFF7F7F5":"FFFFFFFF"}};
+          row.getCell(2).fill=row.getCell(1).fill;
+        });
+        ws1.getColumn(1).width=32; ws1.getColumn(2).width=20;
+
+        // ── Foglio 2: PROFORMA (dettaglio) ──
+        const ws2 = wb.addWorksheet("Proforma", { views:[{state:"frozen",ySplit:1,showGridLines:false}] });
+        const cols2 = [
+          {h:"ID / Numero",w:18,k:i=>i.id},
+          {h:"Cliente",w:34,k:i=>i.client},
+          {h:"Classe",w:15,k:i=>classeCredito(i)},
+          {h:"Emissione",w:13,k:i=>i.date||"",fmt:"dd/mm/yyyy",date:true},
+          {h:"Scadenza",w:13,k:i=>i.due||"",fmt:"dd/mm/yyyy",date:true},
+          {h:"Ritardo (gg)",w:12,k:i=>{const d=daysOverdue(i); return d!=null&&d>0?d:0;},num:"0"},
+          {h:"Importo",w:14,k:i=>i.amount||0,num:EUR},
+          {h:"Pagato",w:14,k:i=>i.paid||0,num:EUR},
+          {h:"Residuo",w:14,k:i=>(i.amount-i.paid)||0,num:EUR},
+          {h:"Note",w:40,k:i=>(i.notes||[]).map(n=>n.text).join(" · ")},
+        ];
+        ws2.addRow(cols2.map(c=>c.h));
+        styleHeader(ws2, ws2.getRow(1), cols2.length);
+        ws2.columns.forEach((c,i)=>{ c.width=cols2[i].w; });
+        const sorted = [...invoices].sort((a,b)=> new Date(a.due||a.date||0)-new Date(b.due||b.date||0));
+        sorted.forEach((inv,idx)=>{
+          const cls = classeCredito(inv);
+          const vals = cols2.map(c=>{ let v=c.k(inv); if(c.date&&v){ const dd=new Date(v); if(!isNaN(dd)) v=dd; } return v; });
+          const row = ws2.addRow(vals);
+          row.eachCell((cell,cn)=>{
+            cell.border=borderAll; cell.font={size:10,name:"Calibri"};
+            cell.alignment={vertical:"middle"};
+            if(idx%2) cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFAFAF8"}};
+            const def=cols2[cn-1];
+            if(def.num) cell.numFmt=def.num;
+            if(def.date) cell.numFmt="dd/mm/yyyy";
+            if(def.num&&def.num!=="0") cell.alignment={horizontal:"right"};
+          });
+          // colore "Classe"
+          const cc = row.getCell(3); cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:tint[cls]||"FFFFFFFF"}};
+          cc.font={size:10,bold:true,color:{argb:tcol[cls]||"FF333333"}}; cc.alignment={horizontal:"center"};
+        });
+        ws2.autoFilter = { from:{row:1,column:1}, to:{row:1,column:cols2.length} };
+
+        // ── Foglio 3: CLIENTI (aggregato) ──
+        const ws3 = wb.addWorksheet("Clienti", { views:[{state:"frozen",ySplit:1,showGridLines:false}] });
+        const agg = {};
+        invoices.forEach(i=>{ const k=(i.client||"—").trim(); if(!agg[k]) agg[k]={tot:0,pag:0,res:0,n:0,nap:0,storico:0};
+          agg[k].tot+=i.amount; agg[k].pag+=i.paid; agg[k].res+=(i.amount-i.paid); agg[k].n++;
+          if(classeCredito(i)!=="Pagato") agg[k].nap++; if(isStorico(i)) agg[k].storico+=(i.amount-i.paid); });
+        const cols3=[["Cliente",34],["Proforma",11],["Aperte",10],["Totale",14],["Pagato",14],["Residuo",14],["Storico >24m",15]];
+        ws3.addRow(cols3.map(c=>c[0])); styleHeader(ws3, ws3.getRow(1), cols3.length);
+        ws3.columns.forEach((c,i)=>c.width=cols3[i][1]);
+        Object.entries(agg).sort((a,b)=>b[1].res-a[1].res).forEach(([name,a],idx)=>{
+          const row=ws3.addRow([name,a.n,a.nap,a.tot,a.pag,a.res,a.storico]);
+          row.eachCell((cell,cn)=>{ cell.border=borderAll; cell.font={size:10}; if(idx%2) cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFAFAF8"}};
+            if(cn>=4){ cell.numFmt=EUR; cell.alignment={horizontal:"right"}; }
+            if(cn===6&&a.res>0){ cell.font={size:10,bold:true,color:{argb:"FFBA7517"}}; }
+            if(cn===7&&a.storico>0){ cell.font={size:10,bold:true,color:{argb:"FF993C1D"}}; }
+          });
+        });
+        ws3.autoFilter={ from:{row:1,column:1}, to:{row:1,column:cols3.length} };
+
+        const buf = await wb.xlsx.writeBuffer();
+        const a=document.createElement("a");
+        a.href=URL.createObjectURL(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+        a.download=`Report_CED_${todayStr()}.xlsx`; a.click();
+      };
+      const exportCSV = exportExcel;   // i pulsanti esistenti ora esportano in Excel
 
       const TABS=[
         {id:"dashboard",label:"Dashboard", icon:"ti-layout-dashboard"},
@@ -896,7 +1013,7 @@ In italiano, con numeri ed euro.`,
               <div style={{display:"flex",gap:6}}>
                 {autoSync && <span style={{fontSize:11,padding:"4px 10px",borderRadius:10,background:"rgba(255,255,255,0.15)",color:"#E6F1FB",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-refresh" style={{fontSize:12}}/> Auto-sync ON</span>}
                 <button onClick={exportCSV} style={{background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.25)",color:"#E6F1FB",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
-                  <i className="ti ti-table-export"/> CSV
+                  <i className="ti ti-file-spreadsheet"/> Excel
                 </button>
               </div>
             </div>
@@ -1495,7 +1612,7 @@ In italiano, con numeri ed euro.`,
                 </div>
               )}
               <div style={{marginTop:10,background:"var(--color-background-secondary)",borderRadius:10,padding:"12px 14px"}}>
-                <button onClick={exportCSV} style={{padding:"7px 14px",background:C.greenL,color:C.green,border:`1px solid ${C.green}33`,borderRadius:7,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontWeight:500}}><i className="ti ti-table-export"/>Esporta CSV / Excel</button>
+                <button onClick={exportCSV} style={{padding:"7px 14px",background:C.greenL,color:C.green,border:`1px solid ${C.green}33`,borderRadius:7,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontWeight:500}}><i className="ti ti-file-spreadsheet"/>Esporta Excel (.xlsx)</button>
               </div>
             </div>
           )}
