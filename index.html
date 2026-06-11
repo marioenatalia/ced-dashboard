@@ -282,6 +282,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [excludeEx, setExcludeEx]   = useState(()=>LS.get("ced_exclude_ex",true));
       const [cliFilter, setCliFilter]   = useState("");
       const [cliAiLoading, setCliAiLoading] = useState(null);
+      const [cliFiles, setCliFiles]     = useState({});   // name -> {loading, open:[], paid:[]}
 
       const totale    = invoices.reduce((s,i)=>s+i.amount,0);
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
@@ -568,6 +569,39 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           }
         } catch(e) { setYdError("Errore lettura importi: "+e.message); }
         setCliAiLoading(null);
+      }, [ydToken]);
+
+      // Carica l'elenco dei PDF di un cliente: "da pagare" (cartella) + "pagate" (sottocartelle PAGATO)
+      const loadClientFiles = useCallback(async(cli)=>{
+        if (!ydToken) return;
+        setCliFiles(m=>({...m,[cli.name]:{loading:true, open:[], paid:[]}}));
+        try {
+          const data  = await ydList(ydToken, cli.path);
+          const items = data._embedded?.items || [];
+          const openPdfs = items.filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
+          const pagatoDirs = items.filter(it=>it.type==="dir"&&isExcludedDir(it.name));
+          let paidPdfs = [];
+          for (const pd of pagatoDirs) {
+            try { const sd = await ydList(ydToken, pd.path);
+              paidPdfs = paidPdfs.concat((sd._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"))); } catch(e){}
+          }
+          setCliFiles(m=>({...m,[cli.name]:{loading:false, open:openPdfs, paid:paidPdfs}}));
+        } catch(e) {
+          setCliFiles(m=>({...m,[cli.name]:{loading:false, open:[], paid:[], error:e.message}}));
+        }
+      }, [ydToken]);
+
+      // Visualizza un PDF Yandex (qualsiasi file) nel viewer
+      const viewYdFile = useCallback(async(item, clientName)=>{
+        if (!ydToken) return;
+        setPdfLoading(true); setYdError("");
+        try {
+          const { url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
+          setBlobMap(m=>({...m,[item.path]:{ url, name }}));
+          setViewerInv({ id:item.path, pdfPath:item.path, client:clientName||"" });
+          setTab("viewer");
+        } catch(e) { setYdError("Errore apertura PDF: "+e.message); }
+        setPdfLoading(false);
       }, [ydToken]);
 
       const ydBrowse = useCallback(async(path, token)=>{
@@ -912,45 +946,56 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
                       const open = selected?.__cli===cl.name;
                       return (
                       <div key={cl.name} style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:11,overflow:"hidden"}}>
-                        <div onClick={()=>setSelected(open?null:{__cli:cl.name})} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",cursor:"pointer"}}>
+                        <div onClick={()=>{ const nv=open?null:{__cli:cl.name}; setSelected(nv); if(nv && !cliFiles[cl.name]) loadClientFiles(cl); }} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",cursor:"pointer"}}>
                           <div style={{width:34,height:34,borderRadius:9,background:cl.open>0?C.amberL:C.greenL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                             <i className={`ti ${cl.open>0?"ti-user-exclamation":"ti-user-check"}`} style={{fontSize:16,color:cl.open>0?C.amber:C.green}}/>
                           </div>
                           <div style={{flex:1,minWidth:0}}>
                             <p style={{margin:"0 0 2px",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.name}</p>
                             <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>
-                              <span style={{color:cl.open>0?C.amber:"inherit"}}>{cl.open} aperte</span> · {cl.paid} pagate
+                              <span style={{color:cl.open>0?C.amber:"inherit"}}>{cl.open} da pagare</span> · {cl.paid} pagate
                               {totEuro>0 && <span> · {fmt(totEuro)}</span>}
                             </p>
                           </div>
                           {resid>0 && <span style={{fontSize:13,fontWeight:600,color:C.amber}}>{fmt(resid)}</span>}
                           <i className={`ti ti-chevron-${open?"down":"right"}`} style={{fontSize:14,color:"var(--color-text-secondary)"}}/>
                         </div>
-                        {open && (
+                        {open && (()=>{
+                          const cf = cliFiles[cl.name];
+                          const fileRow = (item, paid)=>{
+                            const inv = invs.find(i=>i.pdfPath===item.path);
+                            return (
+                              <div key={item.path} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
+                                <i className="ti ti-file-type-pdf" style={{fontSize:15,color:paid?C.green:C.amber,flexShrink:0}}/>
+                                <span style={{flex:1,minWidth:0,fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={item.name}>{item.name}</span>
+                                {inv && inv.amount>0 && <span style={{fontSize:11,fontWeight:500,color:paid?C.green:C.amber}}>{fmt(inv.amount-(paid?inv.amount:inv.paid)||inv.amount)}</span>}
+                                <button onClick={()=>viewYdFile(item, cl.name)} disabled={pdfLoading} style={{padding:"3px 8px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:6,fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-eye" style={{fontSize:11}}/>Vedi</button>
+                                {!paid && <button onClick={()=>parsePdf(item)} disabled={pdfLoading} style={{padding:"3px 8px",background:C.blueL,color:C.blue,border:`1px solid ${C.blue}33`,borderRadius:6,fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-sparkles" style={{fontSize:11}}/>AI</button>}
+                              </div>
+                            );
+                          };
+                          return (
                           <div style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"10px 13px"}}>
-                            {invs.length===0 ? (
-                              <div style={{textAlign:"center"}}>
-                                <p style={{margin:"0 0 8px",fontSize:11,color:"var(--color-text-secondary)"}}>Importi non ancora letti per questo cliente.</p>
-                                <button onClick={()=>readClientAmounts(cl)} disabled={cliAiLoading===cl.name} style={{padding:"7px 14px",background:cliAiLoading===cl.name?C.grayL:C.blue,color:cliAiLoading===cl.name?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500,display:"inline-flex",alignItems:"center",gap:5}}>
-                                  {cliAiLoading===cl.name?<><i className="ti ti-loader-2 ti-spin"/>Lettura AI in corso...</>:<><i className="ti ti-sparkles"/>Leggi importi con AI ({cl.open} PDF)</>}
-                                </button>
-                              </div>
+                            {!cf || cf.loading ? (
+                              <p style={{textAlign:"center",fontSize:11,color:"var(--color-text-secondary)",padding:"8px 0"}}><i className="ti ti-loader-2 ti-spin" style={{marginRight:5}}/>Carico proforma da Yandex...</p>
                             ) : (<>
-                              {invs.sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).map(inv=>(
-                                <div key={inv.id} onClick={()=>{setSelected(inv);setTab("fatture");}} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer"}}>
-                                  <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:STATUS[inv.status].bg,color:STATUS[inv.status].c,fontWeight:500}}>{STATUS[inv.status].label}</span>
-                                  <span style={{flex:1,fontSize:11,color:"var(--color-text-secondary)"}}>Scad. {inv.due?fmtD(inv.due):"—"}</span>
-                                  <span style={{fontSize:12,fontWeight:500}}>{fmt(inv.amount)}</span>
-                                  {inv.amount-inv.paid>0 && <span style={{fontSize:11,color:STATUS[inv.status].c}}>· res. {fmt(inv.amount-inv.paid)}</span>}
-                                </div>
-                              ))}
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
-                                <button onClick={()=>readClientAmounts(cl)} disabled={cliAiLoading===cl.name} style={{padding:"5px 10px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer"}}>{cliAiLoading===cl.name?"Aggiorno...":"↻ Rileggi importi"}</button>
-                                <span style={{fontSize:12,color:C.amber}}>Residuo: <b>{fmt(resid)}</b></span>
+                              {/* DA PAGARE */}
+                              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                                <span style={{fontSize:11,fontWeight:600,color:C.amber,textTransform:"uppercase",letterSpacing:.3}}><i className="ti ti-clock" style={{marginRight:4}}/>Da pagare ({cf.open.length})</span>
+                                {cf.open.length>0 && <button onClick={()=>readClientAmounts(cl)} disabled={cliAiLoading===cl.name} style={{padding:"3px 9px",background:cliAiLoading===cl.name?C.grayL:C.blue,color:cliAiLoading===cl.name?C.gray:"white",border:"none",borderRadius:6,fontSize:10,cursor:"pointer",fontWeight:500}}>{cliAiLoading===cl.name?"Leggo...":"Leggi importi AI"}</button>}
                               </div>
+                              {cf.open.length===0 ? <p style={{fontSize:11,color:"var(--color-text-secondary)",margin:"0 0 8px"}}>Nessuna proforma da pagare.</p> : cf.open.map(it=>fileRow(it,false))}
+                              {resid>0 && <div style={{textAlign:"right",fontSize:12,color:C.amber,margin:"6px 0 0"}}>Residuo: <b>{fmt(resid)}</b></div>}
+
+                              {/* PAGATE */}
+                              <div style={{marginTop:12,marginBottom:4}}>
+                                <span style={{fontSize:11,fontWeight:600,color:C.green,textTransform:"uppercase",letterSpacing:.3}}><i className="ti ti-circle-check" style={{marginRight:4}}/>Pagate ({cf.paid.length})</span>
+                              </div>
+                              {cf.paid.length===0 ? <p style={{fontSize:11,color:"var(--color-text-secondary)",margin:0}}>Nessuna proforma pagata.</p> : cf.paid.map(it=>fileRow(it,true))}
                             </>)}
                           </div>
-                        )}
+                          );
+                        })()}
                       </div>
                       );
                     })}
