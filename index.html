@@ -232,6 +232,42 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       catch { return { parse_error:true, raw_text:raw }; }
     }
 
+    // ── Componenti grafici (no librerie) ──
+    function VBars({ series, height=150, money=true }) {
+      const max = Math.max(1, ...series.map(s=>s.value));
+      return (
+        <div style={{display:"flex",alignItems:"stretch",gap:6,height}}>
+          {series.map((s,i)=>(
+            <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4,minWidth:0}}>
+              <div style={{fontSize:9,fontWeight:600,color:s.color||C.blue,whiteSpace:"nowrap"}}>{s.value>0?(money?fmt(s.value):s.value):""}</div>
+              <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}}>
+                <div title={(money?fmt(s.value):s.value)+""} style={{width:"100%",height:`${(s.value/max)*100}%`,minHeight:s.value>0?4:0,background:s.color||C.blue,borderRadius:"5px 5px 0 0",transition:"height .4s"}}/>
+              </div>
+              <div style={{fontSize:9,color:"var(--color-text-secondary)",textAlign:"center",lineHeight:1.15,wordBreak:"break-word"}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    function HBars({ rows }) {
+      const max = Math.max(1, ...rows.map(r=>r.value));
+      return (
+        <div>
+          {rows.map((r,i)=>(
+            <div key={i} style={{marginBottom:7}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3,gap:8}}>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.label}</span>
+                <span style={{fontWeight:600,color:r.color||C.blue,whiteSpace:"nowrap"}}>{r.display}</span>
+              </div>
+              <div style={{background:"var(--color-background-secondary)",borderRadius:5,height:8,overflow:"hidden"}}>
+                <div style={{width:`${(r.value/max)*100}%`,height:"100%",background:r.color||C.blue,borderRadius:5,transition:"width .4s"}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     function CEDDashboard() {
       const [invoices, setInvoicesRaw] = useState(() => {
         const saved = LS.get("ced_invoices", null);
@@ -288,7 +324,21 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
       const residuo   = totale-incassato;
       const scadutiV  = invoices.filter(i=>i.status==="scaduto").reduce((s,i)=>s+(i.amount-i.paid),0);
-      const filtered  = filterS==="tutti" ? invoices : invoices.filter(i=>i.status===filterS);
+
+      // ── Classificazione temporale crediti ──
+      const _today = new Date(); _today.setHours(0,0,0,0);
+      const daysOverdue = inv => {  // giorni di ritardo (riferimento: scadenza, fallback emissione)
+        const ref = inv.due || inv.date; if(!ref) return null;
+        return Math.floor((_today - new Date(ref))/86400000);
+      };
+      const isOpen = inv => inv.status!=="pagato" && (inv.amount-inv.paid)>0;
+      const isStorico = inv => { const d=daysOverdue(inv); return isOpen(inv) && d!=null && d>730; }; // >24 mesi
+      const storicoV  = invoices.filter(isStorico).reduce((s,i)=>s+(i.amount-i.paid),0);
+      const storicoN  = invoices.filter(isStorico).length;
+
+      const filtered  = filterS==="tutti" ? invoices
+                       : filterS==="storico" ? invoices.filter(isStorico)
+                       : invoices.filter(i=>i.status===filterS);
 
       // Wrapper AI che inietta la API key
       const callAIWithKey = async (messages, system) => {
@@ -660,11 +710,26 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       const analyzeAI=async(type)=>{
         setAiLoading(true); setAiResult("");
-        const snap={invoices:invoices.map(i=>({id:i.id,client:i.client,amount:i.amount,paid:i.paid,status:i.status,due:i.due})),totale,incassato,residuo,scadutiV};
+        const snap={invoices:invoices.map(i=>({id:i.id,client:i.client,amount:i.amount,paid:i.paid,status:i.status,due:i.due,giorni_ritardo:daysOverdue(i)})),totale,incassato,residuo,scadutiV,storicoV,storicoN,data_oggi:todayStr()};
         const prompts={
-          cashflow:`Analisi cash flow 60 giorni per centro elaborazione dati. Dati: ${JSON.stringify(snap)}. Includi: entrate settimanali previste con date, rischi liquidità, clienti critici, azioni. In italiano con importi in euro.`,
-          solleciti:`Genera testi sollecito per clienti con pagamenti scaduti o parziali: ${JSON.stringify(snap)}. Per ogni cliente: tono professionale, importo residuo, scadenza. In italiano.`,
-          analisi:`Analisi KPI pagamenti CED: ${JSON.stringify(snap)}. Calcola DSO, tasso incasso, analisi scaduto, raccomandazioni. In italiano.`,
+          cashflow:`Sei un controller finanziario di uno studio CED. Analizza il cash flow sui dati reali (data odierna ${todayStr()}): ${JSON.stringify(snap)}.
+Struttura la risposta con sezioni e titoli chiari:
+1. SINTESI ESECUTIVA (3 righe)
+2. PROIEZIONE INCASSI mese per mese sui prossimi 6 mesi (con importi €)
+3. CREDITI GIÀ SCADUTI da recuperare subito (elenco clienti + €)
+4. CREDITI STORICI >24 MESI: valuta separatamente (probabile inesigibilità, eventuale svalutazione/stralcio) — ${fmt(storicoV)} su ${storicoN} proforma
+5. RISCHI DI LIQUIDITÀ e concentrazione su pochi clienti
+6. AZIONI CONCRETE prioritizzate
+In italiano, importi in euro, conciso ma completo.`,
+          solleciti:`Genera testi di sollecito pronti all'uso per i clienti con crediti scaduti o parziali: ${JSON.stringify(snap)}. Distingui per anzianità: tono cortese (entro 60gg), fermo (60-180gg), formale/ultimo avviso (>180gg e storici >24 mesi). Per ogni cliente: importo residuo, scadenza, giorni di ritardo. In italiano.`,
+          analisi:`Analisi KPI approfondita pagamenti studio CED (oggi ${todayStr()}): ${JSON.stringify(snap)}.
+Struttura con sezioni:
+1. KPI CHIAVE: DSO, tasso di incasso %, % scaduto su crediti, ticket medio
+2. AGING: distribuzione crediti per fasce di anzianità con commento
+3. CREDITI STORICI >24 MESI: impatto e raccomandazione contabile
+4. CONCENTRAZIONE: peso dei primi clienti sul totale crediti
+5. TREND e RACCOMANDAZIONI operative
+In italiano, con numeri ed euro.`,
         };
         try { setAiResult(await callAIWithKey([{role:"user",content:prompts[type]}])); }
         catch(e) { setAiResult("Errore AI: "+e.message); }
@@ -780,6 +845,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
                   {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  bg:C.greenL,c:C.green},
                   {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         bg:C.amberL,c:C.amber},
                   {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",bg:C.redL,  c:C.red},
+                  {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",     bg:C.coralL,c:C.coral},
                 ].map(k=>(
                   <div key={k.label} style={{background:k.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${k.c}22`}}>
                     <div style={{display:"flex",justifyContent:"space-between"}}>
@@ -831,11 +897,16 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           {tab==="fatture" && (
             <div>
               <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
-                {["tutti","pagato","parziale","attesa","scaduto"].map(s=>(
-                  <button key={s} onClick={()=>setFilterS(s)} style={{padding:"4px 12px",borderRadius:20,border:filterS===s?`1.5px solid ${s==="tutti"?C.blue:STATUS[s]?.c}`:"0.5px solid var(--color-border-tertiary)",background:filterS===s?(s==="tutti"?C.blueL:STATUS[s]?.bg):"transparent",color:filterS===s?(s==="tutti"?C.blue:STATUS[s]?.c):"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:filterS===s?500:400}}>
-                    {s==="tutti"?"Tutte":STATUS[s]?.label}
+                {["tutti","pagato","parziale","attesa","scaduto","storico"].map(s=>{
+                  const col = s==="tutti"?C.blue : s==="storico"?C.coral : STATUS[s]?.c;
+                  const bgc = s==="tutti"?C.blueL : s==="storico"?C.coralL : STATUS[s]?.bg;
+                  const lbl = s==="tutti"?"Tutte" : s==="storico"?`Storico >24m${storicoN?` (${storicoN})`:""}` : STATUS[s]?.label;
+                  return (
+                  <button key={s} onClick={()=>setFilterS(s)} style={{padding:"4px 12px",borderRadius:20,border:filterS===s?`1.5px solid ${col}`:"0.5px solid var(--color-border-tertiary)",background:filterS===s?bgc:"transparent",color:filterS===s?col:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:filterS===s?500:400}}>
+                    {lbl}
                   </button>
-                ))}
+                  );
+                })}
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
                 {filtered.map(inv=>(
@@ -1210,14 +1281,109 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             </div>
           )}
 
-          {/* ══ AI REPORT ══ */}
+          {/* ══ AI REPORT / ANALISI ══ */}
           {tab==="ai" && (
             <div>
+              {(()=>{
+                const openInv = invoices.filter(isOpen);
+                // ─ Cash flow: incassi previsti prossimi 6 mesi (per mese di scadenza) ─
+                const mLabels = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
+                const cf = [];
+                let scadutoNonStorico = 0;
+                openInv.forEach(inv=>{
+                  const d = daysOverdue(inv); const res = inv.amount-inv.paid;
+                  if (d!=null && d>730) return;               // storico: escluso dal cashflow
+                  if (d!=null && d>0) scadutoNonStorico += res; // già scaduto (incassabile)
+                });
+                for (let k=0;k<6;k++){
+                  const dt = new Date(_today.getFullYear(), _today.getMonth()+k, 1);
+                  const mEnd = new Date(_today.getFullYear(), _today.getMonth()+k+1, 1);
+                  let v=0;
+                  openInv.forEach(inv=>{
+                    if(!inv.due) return; const due=new Date(inv.due);
+                    const od=daysOverdue(inv); if(od!=null&&od>730) return;
+                    if(due>=dt && due<mEnd && (od==null||od<=0)) v+=inv.amount-inv.paid;
+                  });
+                  cf.push({ label:`${mLabels[dt.getMonth()]}`, value:v, color:C.blue });
+                }
+                const cfSeries = [{label:"Scaduto",value:scadutoNonStorico,color:C.red}, ...cf];
+                // ─ Aging crediti aperti ─
+                const buckets = [
+                  {label:"Corrente",max:0,color:C.green,v:0},
+                  {label:"1-30g",max:30,color:C.amber,v:0},
+                  {label:"31-60g",max:60,color:C.amber,v:0},
+                  {label:"61-90g",max:90,color:C.coral,v:0},
+                  {label:"91-180g",max:180,color:C.red,v:0},
+                  {label:"180g-24m",max:730,color:C.red,v:0},
+                  {label:">24m",max:99999,color:C.coral,v:0},
+                ];
+                openInv.forEach(inv=>{
+                  const d=daysOverdue(inv); const res=inv.amount-inv.paid;
+                  if(d==null||d<=0){ buckets[0].v+=res; return; }
+                  for(const b of buckets.slice(1)){ if(d<=b.max){ b.v+=res; break; } }
+                });
+                const agingSeries = buckets.map(b=>({label:b.label,value:b.v,color:b.color}));
+                // ─ KPI ─
+                const tasso = totale>0?Math.round((incassato/totale)*100):0;
+                const pctScaduto = residuo>0?Math.round(((scadutiV+storicoV)/residuo)*100):0;
+                // DSO approssimato: media giorni scaduto pesata sui crediti aperti
+                let wDays=0, wSum=0;
+                openInv.forEach(inv=>{ const d=daysOverdue(inv); const res=inv.amount-inv.paid; if(d!=null){ wDays+=Math.max(0,d)*res; wSum+=res; } });
+                const dso = wSum>0?Math.round(wDays/wSum):0;
+                // distribuzione per stato (valore residuo)
+                const distRows = [
+                  {label:"In attesa",value:invoices.filter(i=>i.status==="attesa").reduce((s,i)=>s+(i.amount-i.paid),0),color:C.blue},
+                  {label:"Parziale", value:invoices.filter(i=>i.status==="parziale").reduce((s,i)=>s+(i.amount-i.paid),0),color:C.amber},
+                  {label:"Scaduto",  value:scadutiV,color:C.red},
+                  {label:"Storico >24m",value:storicoV,color:C.coral},
+                ].map(r=>({...r,display:fmt(r.value)}));
+                // top clienti per residuo
+                const byClient={};
+                openInv.forEach(inv=>{ const k=inv.client||"—"; byClient[k]=(byClient[k]||0)+(inv.amount-inv.paid); });
+                const topRows = Object.entries(byClient).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>({label:k,value:v,display:fmt(v),color:C.purple}));
+                const kpis = [
+                  {l:"DSO medio",v:`${dso} gg`,c:C.blue},
+                  {l:"Tasso incasso",v:`${tasso}%`,c:C.green},
+                  {l:"% Scaduto",v:`${pctScaduto}%`,c:C.red},
+                  {l:"Crediti aperti",v:openInv.length,c:C.amber},
+                ];
+                const hasData = openInv.length>0 || invoices.length>0;
+                if(!hasData) return <div style={{textAlign:"center",padding:"30px 20px",fontSize:12,color:"var(--color-text-secondary)"}}>Nessun dato. Leggi gli importi delle proforma (tab Clienti) per popolare le analisi.</div>;
+                return (<>
+                  {/* CASH FLOW */}
+                  <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-trending-up" style={{fontSize:17,color:C.blue}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>Cash Flow · incassi previsti</h3></div>
+                    <VBars series={cfSeries} height={150}/>
+                    <p style={{margin:"10px 0 0",fontSize:10,color:"var(--color-text-secondary)",textAlign:"center"}}>Residuo da incassare per mese di scadenza · "Scaduto" = già esigibile (storico >24m escluso)</p>
+                  </div>
+                  {/* AGING */}
+                  <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-clock-pause" style={{fontSize:17,color:C.amber}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>Aging crediti · anzianità</h3></div>
+                    <VBars series={agingSeries} height={140}/>
+                  </div>
+                  {/* KPI */}
+                  <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-chart-bar" style={{fontSize:17,color:C.green}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>KPI pagamenti</h3></div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8,marginBottom:14}}>
+                      {kpis.map(k=>(
+                        <div key={k.l} style={{background:"var(--color-background-secondary)",borderRadius:9,padding:"9px 11px"}}>
+                          <p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:500}}>{k.l}</p>
+                          <p style={{margin:0,fontSize:17,fontWeight:600,color:k.c}}>{k.v}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p style={{margin:"0 0 7px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:.3}}>Distribuzione crediti per stato</p>
+                    <HBars rows={distRows}/>
+                    <p style={{margin:"14px 0 7px",fontSize:11,fontWeight:600,color:"var(--color-text-secondary)",textTransform:"uppercase",letterSpacing:.3}}>Top clienti per residuo</p>
+                    {topRows.length>0 ? <HBars rows={topRows}/> : <p style={{fontSize:11,color:"var(--color-text-secondary)"}}>Nessun credito aperto.</p>}
+                  </div>
+                </>);
+              })()}
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Analisi AI sui dati reali</h3>
+                <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Approfondimento AI (testuale)</h3>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:8}}>
                   {[
-                    {key:"cashflow", label:"Cash Flow 60gg", desc:"Proiezione con date",   icon:"ti-trending-up", bg:C.blueL, c:C.blue},
+                    {key:"cashflow", label:"Cash Flow 6 mesi", desc:"Proiezione + storico",  icon:"ti-trending-up", bg:C.blueL, c:C.blue},
                     {key:"solleciti",label:"Genera Solleciti",desc:"Per clienti morosi",    icon:"ti-mail",        bg:C.redL,  c:C.red},
                     {key:"analisi",  label:"Analisi KPI",    desc:"DSO, tasso incasso",     icon:"ti-chart-bar",   bg:C.greenL,c:C.green},
                   ].map(a=>(
