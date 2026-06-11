@@ -144,6 +144,21 @@
     const now  = () => new Date().toISOString();
     const todayStr = () => new Date().toISOString().split("T")[0];
 
+    // Giorni di ritardo (riferimento: scadenza, fallback emissione). Negativo = non ancora scaduta.
+    const overdueDays = inv => {
+      const ref = inv.due || inv.date; if(!ref) return null;
+      const t = new Date(); t.setHours(0,0,0,0);
+      const r = new Date(ref); if(isNaN(r)) return null;
+      return Math.floor((t - r)/86400000);
+    };
+    // Stato effettivo calcolato dalla data: una proforma aperta con scadenza passata è "scaduto".
+    const effStatus = inv => {
+      if (inv.status==="pagato" || (inv.amount>0 && inv.paid>=inv.amount)) return "pagato";
+      const d = overdueDays(inv);
+      if (d!=null && d>0) return "scaduto";
+      return inv.paid>0 ? "parziale" : "attesa";
+    };
+
     const STATUS = {
       pagato:  { label:"Pagato",    bg:C.greenL, c:C.green,  icon:"ti-circle-check"   },
       parziale:{ label:"Parziale",  bg:C.amberL, c:C.amber,  icon:"ti-clock-hour-4"   },
@@ -271,7 +286,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
     function CEDDashboard() {
       const [invoices, setInvoicesRaw] = useState(() => {
         const saved = LS.get("ced_invoices", null);
-        return saved ? saved.map(i=>({...i, pdfBlob:null})) : SAMPLE;
+        const base = saved ? saved.map(i=>({...i, pdfBlob:null})) : SAMPLE;
+        return base.map(i=>({...i, status:effStatus(i)}));   // ricalcola lo scaduto dalla data ad ogni avvio
       });
       const [blobMap, setBlobMap] = useState({});
 
@@ -323,21 +339,19 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const totale    = invoices.reduce((s,i)=>s+i.amount,0);
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
       const residuo   = totale-incassato;
-      const scadutiV  = invoices.filter(i=>i.status==="scaduto").reduce((s,i)=>s+(i.amount-i.paid),0);
-
-      // ── Classificazione temporale crediti ──
+      // ── Classificazione temporale crediti (stato derivato dalla data) ──
       const _today = new Date(); _today.setHours(0,0,0,0);
-      const daysOverdue = inv => {  // giorni di ritardo (riferimento: scadenza, fallback emissione)
-        const ref = inv.due || inv.date; if(!ref) return null;
-        return Math.floor((_today - new Date(ref))/86400000);
-      };
+      const daysOverdue = overdueDays;
       const isOpen = inv => inv.status!=="pagato" && (inv.amount-inv.paid)>0;
       const isStorico = inv => { const d=daysOverdue(inv); return isOpen(inv) && d!=null && d>730; }; // >24 mesi
+      // Scaduto = aperto e in ritardo, MA non ancora storico (1..730 gg). Storico gestito a parte.
+      const scadutiV  = invoices.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; }).reduce((s,i)=>s+(i.amount-i.paid),0);
       const storicoV  = invoices.filter(isStorico).reduce((s,i)=>s+(i.amount-i.paid),0);
       const storicoN  = invoices.filter(isStorico).length;
 
       const filtered  = filterS==="tutti" ? invoices
                        : filterS==="storico" ? invoices.filter(isStorico)
+                       : filterS==="scaduto" ? invoices.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; })
                        : invoices.filter(i=>i.status===filterS);
 
       // Wrapper AI che inietta la API key
@@ -409,7 +423,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           id, client:d.cliente?.ragione_sociale||"Cliente sconosciuto",
           amount:d.importo_totale||0, paid:0,
           date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
-          status:"attesa",
+          status:effStatus({amount:d.importo_totale||0,paid:0,due:d.data_scadenza||""}),
           notes:d.note?[{text:d.note,author:"Import PDF",scanned:d.affidabilita_estrazione==="bassa"}]:[],
           payments:[], pdfPath:pdfResult.path, syncedAt:now(),
         };
@@ -500,14 +514,13 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
               const id     = d.numero || `PRF-SYNC-${Date.now()}-${added}`;
               const amount = d.importo_totale || 0;
               const paid   = Math.min(d.importo_gia_pagato || 0, amount);   // residuo = amount - paid
-              const status = paid >= amount && amount > 0 ? "pagato"
-                           : paid > 0 ? "parziale"
-                           : (d.stato_pagamento === "pagato" ? "pagato" : "attesa");
+              const due = d.data_scadenza||"";
+              const status = d.stato_pagamento==="pagato" ? "pagato" : effStatus({amount,paid,due,status:"attesa"});
               const payments = paid > 0 ? [{date:todayStr(),amount:paid,method:"da nota PDF"}] : [];
               const newInv = {
                 id, client:d.cliente?.ragione_sociale||item.name.replace(".pdf",""),
                 amount, paid,
-                date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
+                date:d.data_emissione||todayStr(), due,
                 status,
                 notes:d.note?[{text:d.note,author:"Sync auto",scanned:d.affidabilita_estrazione==="bassa"}]:[],
                 payments, pdfPath:item.path, syncedAt:now(),
@@ -610,8 +623,9 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
               const id = d.numero || `${cli.name}-${item.name}`;
               const amount = d.importo_totale||0;
               const paid = Math.min(d.importo_gia_pagato||0, amount);
-              const status = paid>=amount&&amount>0?"pagato":paid>0?"parziale":"attesa";
-              const newInv = { id, client:cli.name, amount, paid, date:d.data_emissione||todayStr(), due:d.data_scadenza||"",
+              const due = d.data_scadenza||"";
+              const status = effStatus({amount,paid,due,status:"attesa"});
+              const newInv = { id, client:cli.name, amount, paid, date:d.data_emissione||todayStr(), due,
                 status, notes:d.note?[{text:d.note,author:"AI",scanned:false}]:[], payments:paid>0?[{date:todayStr(),amount:paid,method:"da nota PDF"}]:[], pdfPath:item.path, syncedAt:now() };
               setBlobMap(m=>({...m,[id]:{url,name}}));
               setInvoices(p=>[newInv,...p.filter(i=>i.id!==id)]);
