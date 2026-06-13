@@ -11,28 +11,34 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
+    /* TEMA CHIARO (default) — sfondo bianco */
     :root {
       --color-background-primary: #ffffff;
-      --color-background-secondary: #f7f7f5;
-      --color-border-tertiary: #e8e6df;
-      --color-border-secondary: #d4d2cb;
+      --color-background-secondary: #f1f2f4;
+      --color-surface: #ffffff;
+      --color-border-tertiary: #e8e9ec;
+      --color-border-secondary: #d8dade;
       --color-text-secondary: #6b6967;
       --color-text-primary: #1a1917;
+      --shadow-card: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+      --page-bg: #f6f7f9;
     }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --color-background-primary: #1e1e1e;
-        --color-background-secondary: #2a2a2a;
-        --color-border-tertiary: #3a3a3a;
-        --color-border-secondary: #4a4a4a;
-        --color-text-secondary: #a0a0a0;
-        --color-text-primary: #f0f0f0;
-      }
+    /* TEMA NOTTURNO — attivato manualmente con data-theme="dark" */
+    :root[data-theme="dark"] {
+      --color-background-primary: #1c1f26;
+      --color-background-secondary: #232733;
+      --color-surface: #1c1f26;
+      --color-border-tertiary: #333845;
+      --color-border-secondary: #444b5a;
+      --color-text-secondary: #9aa3b2;
+      --color-text-primary: #eef1f6;
+      --shadow-card: 0 2px 8px rgba(0,0,0,.35);
+      --page-bg: #14161c;
     }
     body {
       margin: 0;
       padding: 16px;
-      background: var(--color-background-secondary);
+      background: var(--page-bg);
       color: var(--color-text-primary);
       font-family: 'Segoe UI', system-ui, sans-serif;
     }
@@ -101,6 +107,8 @@
   <div id="root" style="display:none"></div>
 
   <script>
+    // Tema: default CHIARO. Applicato subito per evitare flash.
+    (function(){ try { document.documentElement.setAttribute("data-theme", localStorage.getItem("ced_theme")||"light"); } catch(e){ document.documentElement.setAttribute("data-theme","light"); } })();
     const USERS = { "mario@focusdata": "mario-2026" };
 
     function doLogin() {
@@ -322,6 +330,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [ocrLoading, setOcrLoading] = useState(false);
       const [apiKey, setApiKey]         = useState(()=>LS.raw("ced_api_key"));
       const [showApiKey, setShowApiKey] = useState(false);
+      const [theme, setTheme] = useState(()=>{ try { return localStorage.getItem("ced_theme")||"light"; } catch { return "light"; } });
+      const toggleTheme = ()=>{ const t = theme==="dark"?"light":"dark"; setTheme(t); try{localStorage.setItem("ced_theme",t);}catch{} document.documentElement.setAttribute("data-theme",t); };
 
       const [ydToken, setYdToken]       = useState(()=>LS.raw("yd_token"));
       const [ydSyncPath, setYdSyncPath] = useState(()=>LS.raw("yd_sync_path")||"/Proforma");
@@ -1036,7 +1046,9 @@ In italiano, con numeri ed euro.`,
                 </p>
               </div>
               <div style={{display:"flex",gap:6}}>
-                {autoSync && <span style={{fontSize:11,padding:"4px 10px",borderRadius:10,background:"rgba(255,255,255,0.15)",color:"#E6F1FB",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-refresh" style={{fontSize:12}}/> Auto-sync ON</span>}
+                <button onClick={toggleTheme} title={theme==="dark"?"Modalità chiara":"Modalità notturna"} style={{background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.25)",color:"#E6F1FB",borderRadius:8,padding:"6px 10px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                  <i className={`ti ${theme==="dark"?"ti-sun":"ti-moon"}`}/>
+                </button>
                 <button onClick={exportCSV} style={{background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.25)",color:"#E6F1FB",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                   <i className="ti ti-file-spreadsheet"/> Excel
                 </button>
@@ -1063,21 +1075,20 @@ In italiano, con numeri ed euro.`,
             <div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(165px,1fr))",gap:12,marginBottom:14}}>
                 {[
-                  {label:"Fatturato",value:fmt(totale),  icon:"ti-receipt",        grad:"linear-gradient(135deg,#1E6FB8 0%,#0F4C81 100%)"},
-                  {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  grad:"linear-gradient(135deg,#46A03B 0%,#2E6B12 100%)"},
-                  {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         grad:"linear-gradient(135deg,#E0A33A 0%,#B7770F 100%)"},
-                  {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",grad:"linear-gradient(135deg,#D04545 0%,#9C2727 100%)"},
-                  {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",     grad:"linear-gradient(135deg,#B0552E 0%,#7E3617 100%)"},
+                  {label:"Fatturato",value:fmt(totale),  icon:"ti-receipt",        c:C.blue},
+                  {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  c:C.green},
+                  {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         c:C.amber},
+                  {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",c:C.red},
+                  {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",     c:C.coral},
                 ].map(k=>(
-                  <div key={k.label} style={{position:"relative",background:k.grad,borderRadius:16,padding:"15px 16px",boxShadow:"0 6px 18px -6px rgba(0,0,0,.35)",overflow:"hidden"}}>
-                    <div style={{position:"absolute",right:-12,top:-12,width:64,height:64,borderRadius:"50%",background:"rgba(255,255,255,0.10)"}}/>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                      <div style={{width:30,height:30,borderRadius:9,background:"rgba(255,255,255,0.18)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                        <i className={`ti ${k.icon}`} style={{fontSize:16,color:"#fff"}}/>
+                  <div key={k.label} style={{position:"relative",background:"var(--color-surface)",borderRadius:14,padding:"15px 16px",border:"1px solid var(--color-border-tertiary)",boxShadow:"var(--shadow-card)",borderTop:`3px solid ${k.c}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11}}>
+                      <div style={{width:32,height:32,borderRadius:9,background:k.c+"1A",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <i className={`ti ${k.icon}`} style={{fontSize:17,color:k.c}}/>
                       </div>
-                      <p style={{margin:0,fontSize:10.5,color:"rgba(255,255,255,0.85)",fontWeight:600,textTransform:"uppercase",letterSpacing:.5}}>{k.label}</p>
+                      <p style={{margin:0,fontSize:10.5,color:"var(--color-text-secondary)",fontWeight:600,textTransform:"uppercase",letterSpacing:.5}}>{k.label}</p>
                     </div>
-                    <p style={{margin:0,fontSize:23,fontWeight:700,color:"#fff",letterSpacing:-.5}}>{k.value}</p>
+                    <p style={{margin:0,fontSize:22,fontWeight:700,color:"var(--color-text-primary)",letterSpacing:-.5}}>{k.value}</p>
                   </div>
                 ))}
               </div>
