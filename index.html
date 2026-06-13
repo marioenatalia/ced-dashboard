@@ -148,6 +148,18 @@
       purple:"#534AB7",purpleL:"#EEEDFE",
     };
 
+    // Palette SOBRIA blu-grigio per tutta la grafica (grafici, accenti)
+    const S = {
+      good:  "#4A7A8C",   // incassi / positivo (blu-petrolio)
+      slate: "#54708A",   // neutro
+      slateD:"#3E5C76",   // neutro scuro
+      ink:   "#2E4257",   // più scuro
+      mute:  "#8CA0B3",   // chiaro
+      warn:  "#8C6A6A",   // attenzione (clay sobrio)
+      warnD: "#6E5258",   // attenzione scuro
+      gray:  "#6E7E92",
+    };
+
     const fmt  = n => new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR",maximumFractionDigits:0}).format(n||0);
     const fmtD = d => { try { return new Date(d).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"}); } catch { return "—"; }};
     const now  = () => new Date().toISOString();
@@ -380,24 +392,24 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           const dt=new Date(_today.getFullYear(),_today.getMonth()+k,1);
           const me=new Date(_today.getFullYear(),_today.getMonth()+k+1,1);
           let v=0; openInv.forEach(inv=>{ if(!inv.due) return; const due=new Date(inv.due); const od=daysOverdue(inv); if(od!=null&&od>730) return; if(due>=dt&&due<me&&(od==null||od<=0)) v+=inv.amount-inv.paid; });
-          cf.push({label:mLabels[dt.getMonth()],value:v,color:C.blue});
+          cf.push({label:mLabels[dt.getMonth()],value:v,color:S.slate});
         }
-        const cashflow = [{label:"Scaduto",value:scadOra,color:C.red},...cf];
+        const cashflow = [{label:"Scaduto",value:scadOra,color:S.warn},...cf];
         // Incassi storici: pagamenti registrati per mese (ultimi 6 mesi)
         const inc = [];
         for (let k=5;k>=0;k--){
           const dt=new Date(_today.getFullYear(),_today.getMonth()-k,1);
           const me=new Date(_today.getFullYear(),_today.getMonth()-k+1,1);
           let v=0; invoices.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
-          inc.push({label:mLabels[dt.getMonth()],value:v,color:C.green});
+          inc.push({label:mLabels[dt.getMonth()],value:v,color:S.good});
         }
-        // Aging crediti aperti
-        const B=[{label:"Corrente",max:0,color:C.green,v:0},{label:"1-30g",max:30,color:C.amber,v:0},{label:"31-60g",max:60,color:C.amber,v:0},{label:"61-90g",max:90,color:C.coral,v:0},{label:"91-180g",max:180,color:C.red,v:0},{label:"180g-24m",max:730,color:C.red,v:0},{label:">24m",max:1e9,color:C.coral,v:0}];
+        // Aging crediti aperti — scala blu-grigio che scurisce con l'anzianità (peggiore = clay)
+        const B=[{label:"Corrente",max:0,color:S.good,v:0},{label:"1-30g",max:30,color:S.mute,v:0},{label:"31-60g",max:60,color:S.slate,v:0},{label:"61-90g",max:90,color:S.slateD,v:0},{label:"91-180g",max:180,color:S.ink,v:0},{label:"180g-24m",max:730,color:S.warn,v:0},{label:">24m",max:1e9,color:S.warnD,v:0}];
         openInv.forEach(inv=>{ const d=daysOverdue(inv); const res=inv.amount-inv.paid; if(d==null||d<=0){B[0].v+=res;return;} for(const b of B.slice(1)){ if(d<=b.max){b.v+=res;break;} } });
         const aging = B.map(b=>({label:b.label,value:b.v,color:b.color}));
         // Top clienti in sofferenza (residuo aperto)
         const byCli={}; openInv.forEach(inv=>{ const k=inv.client||"—"; byCli[k]=(byCli[k]||0)+(inv.amount-inv.paid); });
-        const topSoff = Object.entries(byCli).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>({label:k,value:v,display:fmt(v),color:C.coral}));
+        const topSoff = Object.entries(byCli).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>({label:k,value:v,display:fmt(v),color:S.slate}));
         const dso = (()=>{ let wd=0,ws=0; openInv.forEach(inv=>{ const d=daysOverdue(inv); const res=inv.amount-inv.paid; if(d!=null){ wd+=Math.max(0,d)*res; ws+=res; } }); return ws>0?Math.round(wd/ws):0; })();
         return { cashflow, incassiMensili:inc, aging, topSoff, dso, openCount:openInv.length, incassato6m:inc.reduce((s,x)=>s+x.value,0) };
       })();
@@ -1095,10 +1107,10 @@ In italiano, con numeri ed euro.`,
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:16,padding:"16px 18px",marginBottom:12,boxShadow:"0 2px 10px -4px rgba(0,0,0,.12)"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:7}}>
                   <span style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Tasso di incasso</span>
-                  <span style={{fontSize:22,fontWeight:700,color:C.green,letterSpacing:-.5}}>{totale>0?Math.round((incassato/totale)*100):0}%</span>
+                  <span style={{fontSize:22,fontWeight:700,color:S.good,letterSpacing:-.5}}>{totale>0?Math.round((incassato/totale)*100):0}%</span>
                 </div>
                 <div style={{background:"var(--color-background-secondary)",borderRadius:8,height:11,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${totale>0?(incassato/totale)*100:0}%`,background:"linear-gradient(90deg,#46A03B,#7BC043)",borderRadius:8,transition:"width .6s"}}/>
+                  <div style={{height:"100%",width:`${totale>0?(incassato/totale)*100:0}%`,background:"linear-gradient(90deg,#3E5C76,#4A7A8C)",borderRadius:8,transition:"width .6s"}}/>
                 </div>
                 <div style={{display:"flex",gap:10,marginTop:12,flexWrap:"wrap"}}>
                   {Object.entries(STATUS).map(([k,v])=>(
@@ -1113,14 +1125,14 @@ In italiano, con numeri ed euro.`,
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12,marginBottom:12}}>
                 <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:16,padding:"16px 18px",boxShadow:"0 2px 12px -5px rgba(0,0,0,.14)"}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-cash" style={{fontSize:16,color:C.green}}/>Incassi ultimi 6 mesi</span>
-                    <span style={{fontSize:12,fontWeight:600,color:C.green}}>{fmt(ANA.incassato6m)}</span>
+                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-cash" style={{fontSize:16,color:S.good}}/>Incassi ultimi 6 mesi</span>
+                    <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(ANA.incassato6m)}</span>
                   </div>
                   <VBars series={ANA.incassiMensili} height={130}/>
                 </div>
                 <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:16,padding:"16px 18px",boxShadow:"0 2px 12px -5px rgba(0,0,0,.14)"}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-trending-up" style={{fontSize:16,color:C.blue}}/>Incassi previsti</span>
+                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-trending-up" style={{fontSize:16,color:S.slateD}}/>Incassi previsti</span>
                     <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>DSO {ANA.dso}gg</span>
                   </div>
                   <VBars series={ANA.cashflow} height={130}/>
@@ -1129,18 +1141,18 @@ In italiano, con numeri ed euro.`,
 
               {/* ── SOFFERENZE: aging + top clienti ── */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12,marginBottom:12}}>
-                <div style={{background:"var(--color-background-primary)",border:`1px solid ${C.coral}33`,borderRadius:16,padding:"16px 18px",boxShadow:"0 2px 12px -5px rgba(153,60,29,.18)"}}>
+                <div style={{background:"var(--color-background-primary)",border:`1px solid ${S.warn}33`,borderRadius:16,padding:"16px 18px",boxShadow:"0 2px 12px -5px rgba(46,66,87,.16)"}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-alert-octagon" style={{fontSize:16,color:C.coral}}/>Sofferenze · anzianità crediti</span>
+                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-alert-octagon" style={{fontSize:16,color:S.warn}}/>Sofferenze · anzianità crediti</span>
                   </div>
                   <VBars series={ANA.aging} height={130}/>
                   <div style={{display:"flex",justifyContent:"space-around",marginTop:10,paddingTop:10,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
-                    <div style={{textAlign:"center"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Scaduto</p><p style={{margin:0,fontSize:14,fontWeight:600,color:C.red}}>{fmt(scadutiV)}</p></div>
-                    <div style={{textAlign:"center"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Storico &gt;24m</p><p style={{margin:0,fontSize:14,fontWeight:600,color:C.coral}}>{fmt(storicoV)}</p></div>
+                    <div style={{textAlign:"center"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Scaduto</p><p style={{margin:0,fontSize:14,fontWeight:600,color:S.warn}}>{fmt(scadutiV)}</p></div>
+                    <div style={{textAlign:"center"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Storico &gt;24m</p><p style={{margin:0,fontSize:14,fontWeight:600,color:S.warnD}}>{fmt(storicoV)}</p></div>
                   </div>
                 </div>
                 <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:16,padding:"16px 18px",boxShadow:"0 2px 12px -5px rgba(0,0,0,.14)"}}>
-                  <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600,marginBottom:12}}><i className="ti ti-user-exclamation" style={{fontSize:16,color:C.coral}}/>Top clienti in sofferenza</span>
+                  <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600,marginBottom:12}}><i className="ti ti-user-exclamation" style={{fontSize:16,color:S.slate}}/>Top clienti in sofferenza</span>
                   {ANA.topSoff.length>0 ? <HBars rows={ANA.topSoff}/> : <p style={{fontSize:12,color:"var(--color-text-secondary)",textAlign:"center",padding:14}}>Nessun credito aperto. Leggi gli importi dalla tab Clienti.</p>}
                 </div>
               </div>
@@ -1581,18 +1593,18 @@ In italiano, con numeri ed euro.`,
                     const od=daysOverdue(inv); if(od!=null&&od>730) return;
                     if(due>=dt && due<mEnd && (od==null||od<=0)) v+=inv.amount-inv.paid;
                   });
-                  cf.push({ label:`${mLabels[dt.getMonth()]}`, value:v, color:C.blue });
+                  cf.push({ label:`${mLabels[dt.getMonth()]}`, value:v, color:S.slate });
                 }
-                const cfSeries = [{label:"Scaduto",value:scadutoNonStorico,color:C.red}, ...cf];
+                const cfSeries = [{label:"Scaduto",value:scadutoNonStorico,color:S.warn}, ...cf];
                 // ─ Aging crediti aperti ─
                 const buckets = [
-                  {label:"Corrente",max:0,color:C.green,v:0},
-                  {label:"1-30g",max:30,color:C.amber,v:0},
-                  {label:"31-60g",max:60,color:C.amber,v:0},
-                  {label:"61-90g",max:90,color:C.coral,v:0},
-                  {label:"91-180g",max:180,color:C.red,v:0},
-                  {label:"180g-24m",max:730,color:C.red,v:0},
-                  {label:">24m",max:99999,color:C.coral,v:0},
+                  {label:"Corrente",max:0,color:S.good,v:0},
+                  {label:"1-30g",max:30,color:S.mute,v:0},
+                  {label:"31-60g",max:60,color:S.slate,v:0},
+                  {label:"61-90g",max:90,color:S.slateD,v:0},
+                  {label:"91-180g",max:180,color:S.ink,v:0},
+                  {label:"180g-24m",max:730,color:S.warn,v:0},
+                  {label:">24m",max:99999,color:S.warnD,v:0},
                 ];
                 openInv.forEach(inv=>{
                   const d=daysOverdue(inv); const res=inv.amount-inv.paid;
@@ -1609,38 +1621,38 @@ In italiano, con numeri ed euro.`,
                 const dso = wSum>0?Math.round(wDays/wSum):0;
                 // distribuzione per stato (valore residuo)
                 const distRows = [
-                  {label:"In attesa",value:invoices.filter(i=>i.status==="attesa").reduce((s,i)=>s+(i.amount-i.paid),0),color:C.blue},
-                  {label:"Parziale", value:invoices.filter(i=>i.status==="parziale").reduce((s,i)=>s+(i.amount-i.paid),0),color:C.amber},
-                  {label:"Scaduto",  value:scadutiV,color:C.red},
-                  {label:"Storico >24m",value:storicoV,color:C.coral},
+                  {label:"In attesa",value:invoices.filter(i=>i.status==="attesa").reduce((s,i)=>s+(i.amount-i.paid),0),color:S.slate},
+                  {label:"Parziale", value:invoices.filter(i=>i.status==="parziale").reduce((s,i)=>s+(i.amount-i.paid),0),color:S.mute},
+                  {label:"Scaduto",  value:scadutiV,color:S.warn},
+                  {label:"Storico >24m",value:storicoV,color:S.warnD},
                 ].map(r=>({...r,display:fmt(r.value)}));
                 // top clienti per residuo
                 const byClient={};
                 openInv.forEach(inv=>{ const k=inv.client||"—"; byClient[k]=(byClient[k]||0)+(inv.amount-inv.paid); });
-                const topRows = Object.entries(byClient).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>({label:k,value:v,display:fmt(v),color:C.purple}));
+                const topRows = Object.entries(byClient).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>({label:k,value:v,display:fmt(v),color:S.slate}));
                 const kpis = [
-                  {l:"DSO medio",v:`${dso} gg`,c:C.blue},
-                  {l:"Tasso incasso",v:`${tasso}%`,c:C.green},
-                  {l:"% Scaduto",v:`${pctScaduto}%`,c:C.red},
-                  {l:"Crediti aperti",v:openInv.length,c:C.amber},
+                  {l:"DSO medio",v:`${dso} gg`,c:S.slateD},
+                  {l:"Tasso incasso",v:`${tasso}%`,c:S.good},
+                  {l:"% Scaduto",v:`${pctScaduto}%`,c:S.warn},
+                  {l:"Crediti aperti",v:openInv.length,c:S.slate},
                 ];
                 const hasData = openInv.length>0 || invoices.length>0;
                 if(!hasData) return <div style={{textAlign:"center",padding:"30px 20px",fontSize:12,color:"var(--color-text-secondary)"}}>Nessun dato. Leggi gli importi delle proforma (tab Clienti) per popolare le analisi.</div>;
                 return (<>
                   {/* CASH FLOW */}
                   <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-trending-up" style={{fontSize:17,color:C.blue}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>Cash Flow · incassi previsti</h3></div>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-trending-up" style={{fontSize:17,color:S.slateD}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>Cash Flow · incassi previsti</h3></div>
                     <VBars series={cfSeries} height={150}/>
                     <p style={{margin:"10px 0 0",fontSize:10,color:"var(--color-text-secondary)",textAlign:"center"}}>Residuo da incassare per mese di scadenza · "Scaduto" = già esigibile (storico >24m escluso)</p>
                   </div>
                   {/* AGING */}
                   <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-clock-pause" style={{fontSize:17,color:C.amber}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>Aging crediti · anzianità</h3></div>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-clock-pause" style={{fontSize:17,color:S.warn}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>Aging crediti · anzianità</h3></div>
                     <VBars series={agingSeries} height={140}/>
                   </div>
                   {/* KPI */}
                   <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-chart-bar" style={{fontSize:17,color:C.green}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>KPI pagamenti</h3></div>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:12}}><i className="ti ti-chart-bar" style={{fontSize:17,color:S.good}}/><h3 style={{margin:0,fontSize:13,fontWeight:600}}>KPI pagamenti</h3></div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8,marginBottom:14}}>
                       {kpis.map(k=>(
                         <div key={k.l} style={{background:"var(--color-background-secondary)",borderRadius:9,padding:"9px 11px"}}>
