@@ -358,6 +358,40 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const storicoV  = invoices.filter(isStorico).reduce((s,i)=>s+(i.amount-i.paid),0);
       const storicoN  = invoices.filter(isStorico).length;
 
+      // ── Analytics condivise (no AI) ──
+      const ANA = (()=>{
+        const openInv = invoices.filter(isOpen);
+        const mLabels = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
+        // Cash flow: incassi previsti prossimi 6 mesi (per mese di scadenza) + barra "Scaduto"
+        let scadOra = 0;
+        openInv.forEach(inv=>{ const d=daysOverdue(inv); if(d!=null&&d>0&&d<=730) scadOra += inv.amount-inv.paid; });
+        const cf = [];
+        for (let k=0;k<6;k++){
+          const dt=new Date(_today.getFullYear(),_today.getMonth()+k,1);
+          const me=new Date(_today.getFullYear(),_today.getMonth()+k+1,1);
+          let v=0; openInv.forEach(inv=>{ if(!inv.due) return; const due=new Date(inv.due); const od=daysOverdue(inv); if(od!=null&&od>730) return; if(due>=dt&&due<me&&(od==null||od<=0)) v+=inv.amount-inv.paid; });
+          cf.push({label:mLabels[dt.getMonth()],value:v,color:C.blue});
+        }
+        const cashflow = [{label:"Scaduto",value:scadOra,color:C.red},...cf];
+        // Incassi storici: pagamenti registrati per mese (ultimi 6 mesi)
+        const inc = [];
+        for (let k=5;k>=0;k--){
+          const dt=new Date(_today.getFullYear(),_today.getMonth()-k,1);
+          const me=new Date(_today.getFullYear(),_today.getMonth()-k+1,1);
+          let v=0; invoices.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
+          inc.push({label:mLabels[dt.getMonth()],value:v,color:C.green});
+        }
+        // Aging crediti aperti
+        const B=[{label:"Corrente",max:0,color:C.green,v:0},{label:"1-30g",max:30,color:C.amber,v:0},{label:"31-60g",max:60,color:C.amber,v:0},{label:"61-90g",max:90,color:C.coral,v:0},{label:"91-180g",max:180,color:C.red,v:0},{label:"180g-24m",max:730,color:C.red,v:0},{label:">24m",max:1e9,color:C.coral,v:0}];
+        openInv.forEach(inv=>{ const d=daysOverdue(inv); const res=inv.amount-inv.paid; if(d==null||d<=0){B[0].v+=res;return;} for(const b of B.slice(1)){ if(d<=b.max){b.v+=res;break;} } });
+        const aging = B.map(b=>({label:b.label,value:b.v,color:b.color}));
+        // Top clienti in sofferenza (residuo aperto)
+        const byCli={}; openInv.forEach(inv=>{ const k=inv.client||"—"; byCli[k]=(byCli[k]||0)+(inv.amount-inv.paid); });
+        const topSoff = Object.entries(byCli).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>({label:k,value:v,display:fmt(v),color:C.coral}));
+        const dso = (()=>{ let wd=0,ws=0; openInv.forEach(inv=>{ const d=daysOverdue(inv); const res=inv.amount-inv.paid; if(d!=null){ wd+=Math.max(0,d)*res; ws+=res; } }); return ws>0?Math.round(wd/ws):0; })();
+        return { cashflow, incassiMensili:inc, aging, topSoff, dso, openCount:openInv.length, incassato6m:inc.reduce((s,x)=>s+x.value,0) };
+      })();
+
       const filtered  = filterS==="tutti" ? invoices
                        : filterS==="storico" ? invoices.filter(isStorico)
                        : filterS==="scaduto" ? invoices.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; })
@@ -379,17 +413,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         return d.content?.[0]?.text ?? "";
       };
 
-      useEffect(()=>{
-        if (!autoSync || !ydToken) return;
-        const shouldRun = ()=>{
-          const ls = LS.raw("ced_last_sync");
-          if (!ls) return true;
-          return ls.split("T")[0] !== todayStr();
-        };
-        if (shouldRun()) runSync();
-        const iv = setInterval(()=>{ if (shouldRun()) runSync(); }, 60*60*1000);
-        return ()=>clearInterval(iv);
-      }, [autoSync, ydToken]);
+      // Verifica nuove proforma SOLO su richiesta (pulsante). Nessuna esecuzione automatica.
+      // (auto-sync disattivato volutamente)
 
       const downloadAndStorePdf = async (token, ydPathItem, itemName) => {
         const dlUrl = await ydDownloadUrl(token, ydPathItem);
@@ -1069,6 +1094,43 @@ In italiano, con numeri ed euro.`,
                   ))}
                 </div>
               </div>
+
+              {/* ── INCASSI (ultimi 6 mesi) + previsione ── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12,marginBottom:12}}>
+                <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-cash" style={{fontSize:16,color:C.green}}/>Incassi ultimi 6 mesi</span>
+                    <span style={{fontSize:12,fontWeight:600,color:C.green}}>{fmt(ANA.incassato6m)}</span>
+                  </div>
+                  <VBars series={ANA.incassiMensili} height={130}/>
+                </div>
+                <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-trending-up" style={{fontSize:16,color:C.blue}}/>Incassi previsti</span>
+                    <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>DSO {ANA.dso}gg</span>
+                  </div>
+                  <VBars series={ANA.cashflow} height={130}/>
+                </div>
+              </div>
+
+              {/* ── SOFFERENZE: aging + top clienti ── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12,marginBottom:12}}>
+                <div style={{background:"var(--color-background-primary)",border:`1px solid ${C.coral}33`,borderRadius:12,padding:"14px 16px"}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                    <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600}}><i className="ti ti-alert-octagon" style={{fontSize:16,color:C.coral}}/>Sofferenze · anzianità crediti</span>
+                  </div>
+                  <VBars series={ANA.aging} height={130}/>
+                  <div style={{display:"flex",justifyContent:"space-around",marginTop:10,paddingTop:10,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                    <div style={{textAlign:"center"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Scaduto</p><p style={{margin:0,fontSize:14,fontWeight:600,color:C.red}}>{fmt(scadutiV)}</p></div>
+                    <div style={{textAlign:"center"}}><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Storico &gt;24m</p><p style={{margin:0,fontSize:14,fontWeight:600,color:C.coral}}>{fmt(storicoV)}</p></div>
+                  </div>
+                </div>
+                <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
+                  <span style={{display:"flex",alignItems:"center",gap:7,fontSize:13,fontWeight:600,marginBottom:12}}><i className="ti ti-user-exclamation" style={{fontSize:16,color:C.coral}}/>Top clienti in sofferenza</span>
+                  {ANA.topSoff.length>0 ? <HBars rows={ANA.topSoff}/> : <p style={{fontSize:12,color:"var(--color-text-secondary)",textAlign:"center",padding:14}}>Nessun credito aperto. Leggi gli importi dalla tab Clienti.</p>}
+                </div>
+              </div>
+
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
                 <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Scadenze critiche</h3>
                 {invoices.filter(i=>i.status!=="pagato").sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).slice(0,5).map(inv=>(
@@ -1401,15 +1463,10 @@ In italiano, con numeri ed euro.`,
                   <i className="ti ti-refresh" style={{fontSize:18,color:C.blue}}/><h3 style={{margin:0,fontSize:13,fontWeight:500}}>Sincronizzazione automatica</h3>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:14}}>
-                  <div style={{padding:"10px 14px",background:autoSync?C.greenL:C.grayL,borderRadius:10,border:`1px solid ${autoSync?C.green:C.gray}22`}}>
-                    <p style={{margin:"0 0 6px",fontSize:11,fontWeight:500,color:autoSync?C.green:C.gray}}>SYNC GIORNALIERA</p>
-                    <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
-                      <div onClick={()=>{ const v=!autoSync; setAutoSync(v); LS.set("ced_auto_sync",v); }} style={{width:36,height:20,borderRadius:10,background:autoSync?C.green:C.grayL,border:`1px solid ${autoSync?C.green:C.gray}44`,position:"relative",cursor:"pointer",transition:"background .2s"}}>
-                        <div style={{position:"absolute",top:2,left:autoSync?17:2,width:16,height:16,borderRadius:8,background:autoSync?"white":C.gray,transition:"left .2s"}}/>
-                      </div>
-                      <span style={{fontSize:12,color:autoSync?C.green:C.gray,fontWeight:500}}>{autoSync?"Attiva":"Disattiva"}</span>
-                    </label>
-                    <p style={{margin:"6px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Scansione ricorsiva di "{ydSyncPath}" e sottocartelle (escluse le cartelle "pagato"). Legge note/acconti e calcola il residuo. Controllo ogni ora, una volta al giorno.</p>
+                  <div style={{padding:"10px 14px",background:C.blueL,borderRadius:10,border:`1px solid ${C.blue}22`}}>
+                    <p style={{margin:"0 0 6px",fontSize:11,fontWeight:500,color:C.blue}}>VERIFICA MANUALE</p>
+                    <p style={{margin:0,fontSize:12,color:C.blue,fontWeight:500,display:"flex",alignItems:"center",gap:5}}><i className="ti ti-hand-click"/> Solo su richiesta</p>
+                    <p style={{margin:"6px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>La verifica delle nuove proforma NON è automatica. Usa i pulsanti qui sotto quando vuoi aggiornare i dati. Scansione ricorsiva di "{ydSyncPath}" (cartelle "pagato" escluse).</p>
                   </div>
                   <div style={{padding:"10px 14px",background:C.blueL,borderRadius:10,border:`1px solid ${C.blue}22`}}>
                     <p style={{margin:"0 0 2px",fontSize:11,fontWeight:500,color:C.blue}}>ULTIMA SYNC</p>
