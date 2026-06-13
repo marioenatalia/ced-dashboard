@@ -1033,7 +1033,7 @@ In italiano, con numeri ed euro.`,
           </div>
 
           {/* ── Header ── */}
-          <div style={{background:"linear-gradient(135deg,#1E6FB8 0%,#0F4C81 60%,#0B3A63 100%)",padding:"18px 22px",borderRadius:16,marginBottom:14,boxShadow:"0 8px 24px -8px rgba(15,76,129,.55)"}}>
+          <div style={{background:"linear-gradient(135deg,#3E5C76 0%,#2E4257 60%,#26303D 100%)",padding:"18px 22px",borderRadius:16,marginBottom:14,boxShadow:"0 8px 24px -10px rgba(46,66,87,.5)"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:9}}>
@@ -1075,11 +1075,11 @@ In italiano, con numeri ed euro.`,
             <div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(165px,1fr))",gap:12,marginBottom:14}}>
                 {[
-                  {label:"Fatturato",value:fmt(totale),  icon:"ti-receipt",        c:C.blue},
-                  {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  c:C.green},
-                  {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         c:C.amber},
-                  {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",c:C.red},
-                  {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",     c:C.coral},
+                  {label:"Fatturato",value:fmt(totale),  icon:"ti-receipt",        c:"#3E5C76"},
+                  {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  c:"#4A7A8C"},
+                  {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         c:"#6E7E92"},
+                  {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",c:"#8C6A6A"},
+                  {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",     c:"#4A5568"},
                 ].map(k=>(
                   <div key={k.label} style={{position:"relative",background:"var(--color-surface)",borderRadius:14,padding:"15px 16px",border:"1px solid var(--color-border-tertiary)",boxShadow:"var(--shadow-card)",borderTop:`3px solid ${k.c}`}}>
                     <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11}}>
