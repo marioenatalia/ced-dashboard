@@ -422,11 +422,14 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const _q = search.trim().toLowerCase();
       const filtered  = _q ? _byStatus.filter(i=>(i.client||"").toLowerCase().includes(_q) || (i.id||"").toLowerCase().includes(_q)) : _byStatus;
 
-      // Wrapper AI che inietta la API key
-      const callAIWithKey = async (messages, system) => {
+      // Modelli: Haiku per estrazione PDF (economico), Opus per analisi/report (ragionamento)
+      const MODEL_EXTRACT = "claude-haiku-4-5-20251001";
+      const MODEL_REASON  = "claude-opus-4-5";
+      // Wrapper AI che inietta la API key. model opzionale (default: ragionamento)
+      const callAIWithKey = async (messages, system, model) => {
         const key = LS.raw("ced_api_key");
         if (!key) throw new Error("API key Anthropic non configurata. Impostala nel pannello in alto.");
-        const body = { model:"claude-opus-4-5", max_tokens:1200, messages };
+        const body = { model: model || MODEL_REASON, max_tokens:1200, messages };
         if (system) body.system = system;
         const r = await fetch("https://api.anthropic.com/v1/messages",{
           method:"POST",
@@ -457,7 +460,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           const key  = LS.raw("ced_api_key");
           if (!key) throw new Error("API key Anthropic non configurata");
           const raw = await (async()=>{
-            const body = { model:"claude-opus-4-5", max_tokens:1200, messages:[{ role:"user", content:[
+            const body = { model:MODEL_EXTRACT, max_tokens:1200, messages:[{ role:"user", content:[
               { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
               { type:"text", text:`Sei un assistente contabile italiano. Analizza questo PDF.\nRispondi SOLO con JSON valido:\n{"tipo":"proforma|fattura|nota_credito|sconosciuto","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"...","indirizzo":"..."},"importo_totale":0.00,"importo_iva":0.00,"importo_imponibile":0.00,"righe":[{"descrizione":"...","quantita":0,"prezzo_unitario":0,"totale":0}],"note":"...","stato_pagamento":"non_pagato|parziale|pagato|sconosciuto","metodo_pagamento_indicato":"...","affidabilita_estrazione":"alta|media|bassa","note_ocr":"..."}` }
             ]}] };
@@ -568,7 +571,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
                 { type:"text", text:`Sei un contabile italiano. Analizza questa proforma/fattura PDF, incluse eventuali NOTE MANOSCRITTE o timbri (es. "acconto 2.000€", "pagato parziale", "saldo entro 30/06"). Rispondi SOLO con JSON valido:
 {"tipo":"proforma|fattura|nota_credito|sconosciuto","numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","cliente":{"ragione_sociale":"...","piva":"..."},"importo_totale":0.00,"importo_gia_pagato":0.00,"stato_pagamento":"non_pagato|parziale|pagato|sconosciuto","note":"trascrivi qui eventuali note/acconti trovati","affidabilita_estrazione":"alta|media|bassa"}
 REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 se nessuno). Se la proforma risulta totalmente pagata metti importo_gia_pagato = importo_totale.` }
-              ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return { parse_error:true }; } });
+              ]}], null, MODEL_EXTRACT).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return { parse_error:true }; } });
               if (d.parse_error) { addLog(`  ✗ Parse fallito: ${item.name}`,"error"); continue; }
               const id     = d.numero || `PRF-SYNC-${Date.now()}-${added}`;
               const amount = d.importo_totale || 0;
@@ -677,7 +680,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
               const d = await callAIWithKey([{ role:"user", content:[
                 { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
                 { type:"text", text:`Contabile italiano. Estrai dalla proforma. SOLO JSON: {"numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","importo_totale":0.00,"importo_gia_pagato":0.00,"note":"acconti/note se presenti"}` }
-              ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return null; } });
+              ]}], null, MODEL_EXTRACT).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return null; } });
               if (!d) continue;
               const id = d.numero || `${cli.name}-${item.name}`;
               const amount = d.importo_totale||0;
@@ -726,7 +729,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
                 const d = await callAIWithKey([{ role:"user", content:[
                   { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
                   { type:"text", text:`Contabile italiano. Estrai dalla proforma. SOLO JSON: {"numero":"...","data_emissione":"YYYY-MM-DD","data_scadenza":"YYYY-MM-DD","importo_totale":0.00,"importo_gia_pagato":0.00,"note":"acconti/note se presenti"}` }
-                ]}]).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return null; } });
+                ]}], null, MODEL_EXTRACT).then(raw=>{ try { return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim()); } catch { return null; } });
                 if (!d) { addLog(`  ✗ ${cli.name}: parse fallito ${item.name}`,"error"); continue; }
                 const id=d.numero||`${cli.name}-${item.name}`;
                 const amount=d.importo_totale||0;
