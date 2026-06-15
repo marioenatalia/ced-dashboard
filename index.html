@@ -9,6 +9,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     /* TEMA CHIARO (default) — sfondo bianco */
@@ -367,6 +368,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [cliFilter, setCliFilter]   = useState("");
       const [cliAiLoading, setCliAiLoading] = useState(null);
       const [cliFiles, setCliFiles]     = useState({});   // name -> {loading, open:[], paid:[]}
+      const [excelStatus, setExcelStatus] = useState(()=>LS.raw("ced_excel_at")?("done"):"idle");
+      const [excelInfo, setExcelInfo]   = useState(()=>LS.get("ced_excel_info",null)); // {attivi,usciti,totale,at}
 
       const totale    = invoices.reduce((s,i)=>s+i.amount,0);
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
@@ -562,6 +565,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           let added=0, skipped=0;
           for (const item of pdfs) {
             if (existing.has(item.path)) { addLog(`↳ Già importato: ${item.name}`,"skip"); skipped++; continue; }
+            const _cliFolder = item.path.replace(/\/+$/,"").split("/").slice(-2)[0]; // cartella cliente
+            if (!folderAllowed(_cliFolder)) { skipped++; continue; }
             addLog(`↳ Elaborazione: ${item.name}...`);
             try {
               const { buf, url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
@@ -639,11 +644,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const otherDirs = items.filter(it=>it.type==="dir"&&!isExcludedDir(it.name));
           // questa cartella è un "cliente"?
           if (pdfsHere.length>0 || pagatoDirs.length>0) {
-            let paid=0;
-            for (const pd of pagatoDirs) { if(scanRef.current.stop) return; paid += await countPdfsInDir(pd.path); }
             const name = basename(path);
-            pushClient(name, path, pdfsHere.length, paid);
-            if (pdfsHere.length>0) addLog(`👤 ${name}: ${pdfsHere.length} aperte · ${paid} pagate`, pdfsHere.length>0?"ok":"info");
+            if (!folderAllowed(name)) { addLog(`⊘ Escluso (fuori Excel): ${name}`,"skip"); }
+            else {
+              let paid=0;
+              for (const pd of pagatoDirs) { if(scanRef.current.stop) return; paid += await countPdfsInDir(pd.path); }
+              pushClient(name, path, pdfsHere.length, paid);
+              if (pdfsHere.length>0) addLog(`👤 ${name}: ${pdfsHere.length} aperte · ${paid} pagate`, pdfsHere.length>0?"ok":"info");
+            }
           }
           // continua nelle sottocartelle non-pagato (categorie + sub-clienti)
           for (const d of otherDirs) {
@@ -787,6 +795,105 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         } catch(e) { setYdError("Errore apertura PDF: "+e.message); }
         setPdfLoading(false);
       }, [ydToken]);
+
+      // ── IMPORT EXCEL (fotografia da incassare) ──
+      const normName = s => (s||"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\b(SRL|SRLS|SNC|SAS|SPA|DI|E|C|ASSOC|ASSOCIAZIONE|CULTURALE)\b/g," ").replace(/\s+/g," ").trim();
+      // Discriminante Excel: una cartella cliente è ammessa se in whitelist (Excel) o NUOVA (non esisteva all'allineamento). Esclusa se nota ma fuori Excel.
+      const folderAllowed = name => {
+        const wl = LS.get("ced_whitelist", null);
+        if (!wl || wl.length===0) return true;            // nessun Excel importato → tutto ammesso
+        const n = normName(name); if(!n) return true;
+        if (wl.some(w => w===n || w.startsWith(n.slice(0,6)) || n.startsWith(w.slice(0,6)))) return true; // in Excel
+        const known = LS.get("ced_known_folders", []);
+        if (known.includes(n)) return false;              // esisteva ma fuori Excel → esclusa
+        return true;                                      // cartella nuova → ammessa
+      };
+      const xlsNum = v => {
+        if (typeof v==="number") return v;
+        if (typeof v==="string"){ let s=v.trim().replace(/€/g,"").replace(/\s/g,""); if(s.includes(",")&&s.includes(".")) s=s.replace(/\./g,"").replace(",","."); else if(s.includes(",")) s=s.replace(",","."); const n=parseFloat(s); return isNaN(n)?0:n; }
+        return 0;
+      };
+      const isPag = v => typeof v==="string" && v.toUpperCase().includes("PAGAT");
+      const isInact = s => typeof s==="string" && /MANDATO VIA|INATTIV|FORFAIT CON|CHIUS/i.test(s);
+      const bilAmount = note => { if(!note) return 0; let m=note.match(/(\d[\d.]*)\s*(?:€\s*)?bilanci/i)||note.match(/bilanci\w*\s*(?:di\s*)?€?\s*(\d[\d.]*)/i); return m?xlsNum(m[1]):0; };
+
+      const importExcel = async (file) => {
+        if (!window.XLSX) { alert("Libreria Excel non caricata, riprova tra un secondo."); return; }
+        setExcelStatus("running");
+        try {
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf, { type:"array" });
+          const grid = name => { const ws=wb.Sheets[name]; return ws?XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""}):[]; };
+          const active={}, inactive={}, notemap={};
+          const put=(d,nm,due,note,sheet)=>{ nm=(nm||"").trim(); if(nm.length<3) return; if(!d[nm]) d[nm]={name:nm,due:0,bil:0,note:note,sheet:sheet}; d[nm].due+=due; if(note&&!d[nm].note) d[nm].note=note; };
+          // FOCUS
+          (grid("FOCUS")||[]).slice(1).forEach(row=>{
+            const nm=String(row[1]||"").trim(); if(nm.length<3) return;
+            const cells=[row[2],row[3],row[4],row[5],row[6]]; const note=String(row[7]||"").trim(); notemap[nm]=note;
+            const inact=isInact(note)||cells.some(isInact);
+            const due=cells.reduce((s,c)=>s+(isPag(c)?0:xlsNum(c)),0);
+            put(inact?inactive:active,nm,due,note,"FOCUS");
+          });
+          // ALTRI
+          (grid("ALTRI")||[]).slice(1).forEach(row=>{
+            const nm=String(row[1]||"").trim(); if(nm.length<3||["MENSILI","BIMESTRALE"].includes(nm.toUpperCase())) return;
+            const note=String(row[2]||"").trim(); notemap[nm]=note;
+            const cells=row.slice(3); const inact=isInact(note)||cells.some(isInact);
+            const due=cells.reduce((s,c)=>s+(isPag(c)?0:xlsNum(c)),0);
+            put(inact?inactive:active,nm,due,note,"ALTRI");
+          });
+          // RAGAZZI (due liste affiancate)
+          (grid("RAGAZZI")||[]).slice(1).forEach(row=>{
+            const a=String(row[1]||"").trim();
+            if(a.length>2){ const due=[row[2],row[3]].reduce((s,c)=>s+(isPag(c)?0:xlsNum(c)),0); put(active,a,due,"semestre","RAGAZZI"); }
+            const b=String(row[6]||"").trim();
+            if(b.length>2){ put(active,b,xlsNum(row[5]),"annuale","RAGAZZI"); }
+          });
+          // BILANCIO: aggiunge parcella se non PAGATO/DEPOSITATO
+          (grid("BILANCIO")||[]).slice(1).forEach(row=>{
+            const nm=String(row[0]||"").trim(); if(nm.length<2) return;
+            const flags=row.slice(1).join(" ").toUpperCase(); if(flags.includes("PAGAT")) return;
+            let note=""; const kn=normName(nm);
+            for(const k in notemap){ const nk=normName(k); if(nk.startsWith(kn.slice(0,6))||kn.startsWith(nk.slice(0,6))){ note=notemap[k]; break; } }
+            const amt=bilAmount(note); if(!amt) return;
+            let tgtKey=Object.keys(active).find(k=>normName(k).startsWith(kn.slice(0,6))||kn.startsWith(normName(k).slice(0,6)));
+            if(!tgtKey){ put(active,nm,0,note,"BILANCIO"); tgtKey=nm; }
+            active[tgtKey].bil+=amt;
+          });
+          // Costruisci invoices dal snapshot
+          const mk=(c,inact)=>{
+            const amount=(c.due||0)+(c.bil||0);
+            return { id:`XLS-${c.sheet}-${c.name}`.slice(0,60), client:c.name, amount, paid:0,
+              date:"", due: inact?"2025-12-31":"", status: inact?"scaduto":(amount>0?"attesa":"pagato"),
+              notes: c.note?[{text:c.note+(c.bil?` · +bilancio ${fmt(c.bil)}`:""),author:"Excel",scanned:false}]:[],
+              payments:[], pdfPath:null, syncedAt:now(), source:"excel", inactive:!!inact };
+          };
+          const invs=[...Object.values(active).map(c=>mk(c,false)), ...Object.values(inactive).filter(c=>c.due>0.5).map(c=>mk(c,true))];
+          // whitelist normalizzata (attivi + usciti)
+          const whitelist=[...Object.keys(active),...Object.keys(inactive)].map(normName).filter(Boolean);
+          // snapshot cartelle Yandex correnti (per esclusione)
+          let known=[];
+          if (ydToken){
+            try {
+              const root=await ydList(ydToken,"/");
+              for(const t of (root._embedded?.items||[]).filter(i=>i.type==="dir")){
+                const sub=await ydList(ydToken,t.path);
+                for(const it of (sub._embedded?.items||[])) if(it.type==="dir") known.push(normName(it.name));
+              }
+            } catch(e){}
+          }
+          const tA=Object.values(active).reduce((s,c)=>s+c.due+c.bil,0);
+          const tI=Object.values(inactive).filter(c=>c.due>0.5).reduce((s,c)=>s+c.due,0);
+          const info={ attivi:Object.values(active).filter(c=>c.due+c.bil>0.5).length, usciti:Object.values(inactive).filter(c=>c.due>0.5).length, totale:tA, usciti_tot:tI, at:now(), known:known.length };
+          setInvoices(invs);
+          LS.set("ced_whitelist", [...new Set(whitelist)]);
+          LS.set("ced_known_folders", [...new Set(known)]);
+          LS.setRaw("ced_excel_at", info.at); LS.set("ced_excel_info", info); LS.setRaw("ced_source","excel");
+          setExcelInfo(info); setExcelStatus("done");
+          alert(`Import completato!\nAttivi da incassare: ${info.attivi} (${fmt(tA)})\nUsciti con arretrato: ${info.usciti} (${fmt(tI)})\nCartelle Yandex note: ${known.length}`);
+          setTab("dashboard");
+        } catch(e){ setExcelStatus("error"); alert("Errore import Excel: "+e.message); }
+      };
 
       const ydBrowse = useCallback(async(path, token)=>{
         const t=token||ydToken; if(!t) return;
@@ -1521,6 +1628,20 @@ In italiano, con numeri ed euro.`,
                     <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>Prossima: {autoSync&&lastSync?new Date(new Date(lastSync.split("T")[0]+"T00:00:00").getTime()+86400000).toLocaleDateString("it-IT"):"—"}</p>
                   </div>
                 </div>
+
+                {/* ── ALLINEAMENTO EXCEL (fotografia da incassare) ── */}
+                <div style={{padding:"12px 14px",background:S.slateD+"12",border:`1px solid ${S.slateD}33`,borderRadius:10,marginBottom:12}}>
+                  <p style={{margin:"0 0 6px",fontSize:12,fontWeight:600,color:S.slateD,display:"flex",alignItems:"center",gap:6}}><i className="ti ti-file-spreadsheet"/>Allinea con Excel (fotografia da incassare)</p>
+                  <p style={{margin:"0 0 8px",fontSize:11,color:"var(--color-text-secondary)"}}>Carica il file PAGAMENTI .xls: la dashboard mostrerà esattamente i clienti e gli importi da incassare dell'Excel. I clienti non presenti vengono nascosti; la sync futura aggiungerà solo le aziende/proforma nuove.</p>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    <label style={{padding:"8px 16px",background:excelStatus==="running"?C.grayL:S.slateD,color:"#fff",borderRadius:8,fontSize:12,cursor:excelStatus==="running"?"wait":"pointer",fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>
+                      <i className={`ti ${excelStatus==="running"?"ti-loader-2 ti-spin":"ti-upload"}`}/>{excelStatus==="running"?"Importazione...":"Carica file Excel"}
+                      <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{ const f=e.target.files?.[0]; if(f) importExcel(f); e.target.value=""; }}/>
+                    </label>
+                    {excelInfo && <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Ultimo import: {new Date(excelInfo.at).toLocaleString("it-IT")} · {excelInfo.attivi} attivi ({fmt(excelInfo.totale)}) · {excelInfo.usciti} usciti</span>}
+                  </div>
+                </div>
+
                 <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"center"}}>
                   <button onClick={scanAnagrafica} disabled={scanStatus==="running"||!ydToken} style={{padding:"8px 18px",background:scanStatus==="running"?C.grayL:C.teal,color:scanStatus==="running"?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:scanStatus==="running"||!ydToken?"not-allowed":"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
                     <i className={`ti ti-users ${scanStatus==="running"?"ti-spin":""}`}/>{scanStatus==="running"?"Scansione in corso...":"Scansiona anagrafica (veloce)"}
