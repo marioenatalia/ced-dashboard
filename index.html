@@ -906,6 +906,13 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         return wl.some(w => w===n || w.startsWith(n.slice(0,6)) || n.startsWith(w.slice(0,6)));
       };
       const recoRef = useRef({ stop:false });
+      // Cambia stato di una riga riconciliazione: "excluded" | "paid" | undefined (toggle)
+      const setRecoRowState = (row, st) => {
+        setRecoRows(prev => {
+          const next = prev.map(r => r===row ? {...r, state: r.state===st?undefined:st} : r);
+          LS.set("ced_reco_rows", next); return next;
+        });
+      };
       const runReconciliation = useCallback(async()=>{
         if (!ydToken) { setYdError("Token Yandex mancante"); return; }
         if (!LS.raw("ced_api_key")) { setYdError("API key Anthropic non configurata"); return; }
@@ -1582,8 +1589,11 @@ In italiano, con numeri ed euro.`,
               </div>
 
               {recoRows.length>0 && (()=>{
-                const miss=recoRows.filter(r=>!r.inExcel); const missTot=miss.reduce((s,r)=>s+(r.totale||0),0);
-                const view = recoFilter==="mancanti" ? miss : recoRows;
+                const fuori=recoRows.filter(r=>!r.inExcel);
+                const miss=fuori.filter(r=>!r.state);
+                const missTot=miss.reduce((s,r)=>s+(r.totale||0),0);
+                const nPagate=recoRows.filter(r=>r.state==="paid").length;
+                const view = recoFilter==="mancanti" ? fuori : recoRows;
                 return (<>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
                     <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>PROFORMA LETTE</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{recoRows.length}</p></div>
@@ -1596,16 +1606,26 @@ In italiano, con numeri ed euro.`,
                     ))}
                   </div>
                   <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
-                    {view.map((r,i)=>(
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
-                        <div style={{width:8,height:8,borderRadius:"50%",background:r.inExcel?S.good:S.warn,flexShrink:0}}/>
+                    {view.map((r,i)=>{
+                      const dimmed = r.state==="excluded"||r.state==="paid";
+                      const dot = r.state==="paid"?S.good : r.state==="excluded"?C.gray : (r.inExcel?S.good:S.warn);
+                      return (
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",opacity:dimmed?.55:1}}>
+                        <div style={{width:8,height:8,borderRadius:"50%",background:dot,flexShrink:0}}/>
                         <div style={{flex:1,minWidth:0}}>
-                          <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.cliente}</p>
-                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}</p>
+                          <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:dimmed?"line-through":"none"}}>{r.cliente}</p>
+                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}{r.state==="paid"?" · ✓ segnata pagata":r.state==="excluded"?" · esclusa":""}</p>
                         </div>
-                        <span style={{fontSize:13,fontWeight:600,color:r.inExcel?"var(--color-text-primary)":S.warn}}>{fmt(r.totale)}</span>
+                        <span style={{fontSize:13,fontWeight:600,color:r.inExcel?"var(--color-text-primary)":S.warn,marginRight:4}}>{fmt(r.totale)}</span>
+                        {r.state ? (
+                          <button onClick={()=>setRecoRowState(r, r.state)} title="Annulla" style={{padding:"4px 8px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:6,fontSize:10,cursor:"pointer",color:"var(--color-text-secondary)"}}>Annulla</button>
+                        ) : (<>
+                          <button onClick={()=>setRecoRowState(r,"paid")} title="Segna pagata" style={{padding:"4px 7px",background:S.good+"18",border:`1px solid ${S.good}44`,borderRadius:6,fontSize:11,cursor:"pointer",color:S.good,display:"flex",alignItems:"center",gap:3}}><i className="ti ti-check"/></button>
+                          <button onClick={()=>setRecoRowState(r,"excluded")} title="Escludi dal conteggio" style={{padding:"4px 7px",background:"transparent",border:"1px solid var(--color-border-tertiary)",borderRadius:6,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-eye-off"/></button>
+                        </>)}
                       </div>
-                    ))}
+                      );
+                    })}
                     {view.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:18}}>Nessuna proforma in questa vista.</p>}
                   </div>
                 </>);
