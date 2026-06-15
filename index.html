@@ -1305,7 +1305,11 @@ In italiano, con numeri ed euro.`,
                     <div style={{background:C.amberL,borderRadius:10,padding:"10px 12px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.amber,fontWeight:500}}>CON APERTE</p><p style={{margin:0,fontSize:19,fontWeight:600,color:C.amber}}>{conAperte}</p></div>
                     <div style={{background:C.purpleL,borderRadius:10,padding:"10px 12px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.purple,fontWeight:500}}>PROFORMA APERTE</p><p style={{margin:0,fontSize:19,fontWeight:600,color:C.purple}}>{totApe}</p></div>
                   </div>
-                  <input value={cliFilter} onChange={e=>setCliFilter(e.target.value)} placeholder="🔍 Cerca cliente..." style={{width:"100%",padding:"8px 12px",borderRadius:9,border:"0.5px solid var(--color-border-secondary)",fontSize:13,marginBottom:10,boxSizing:"border-box"}}/>
+                  <div style={{position:"relative",marginBottom:10}}>
+                    <i className="ti ti-search" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--color-text-secondary)"}}/>
+                    <input value={cliFilter} onChange={e=>setCliFilter(e.target.value)} placeholder="Cerca cliente..." style={{width:"100%",padding:"9px 34px 9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                    {cliFilter && <button onClick={()=>setCliFilter("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:15}}><i className="ti ti-x"/></button>}
+                  </div>
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
                     {list.map(cl=>{
                       const invs = invoices.filter(i=>i.client===cl.name);
@@ -1384,9 +1388,14 @@ In italiano, con numeri ed euro.`,
           {/* ══ PAGAMENTI ══ */}
           {tab==="pagamenti" && (
             <div>
+              <div style={{position:"relative",marginBottom:12}}>
+                <i className="ti ti-search" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--color-text-secondary)"}}/>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cerca cliente o numero proforma..." style={{width:"100%",padding:"9px 34px 9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                {search && <button onClick={()=>setSearch("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:15}}><i className="ti ti-x"/></button>}
+              </div>
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
                 <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Registro incassi</h3>
-                {invoices.filter(i=>i.payments.length>0).flatMap(i=>i.payments.map(p=>({...p,client:i.client,invoice:i.id}))).sort((a,b)=>new Date(b.date)-new Date(a.date)).map((p,i)=>(
+                {invoices.filter(i=>i.payments.length>0).flatMap(i=>i.payments.map(p=>({...p,client:i.client,invoice:i.id}))).filter(p=>{ const q=search.trim().toLowerCase(); return !q || (p.client||"").toLowerCase().includes(q) || (p.invoice||"").toLowerCase().includes(q); }).sort((a,b)=>new Date(b.date)-new Date(a.date)).map((p,i)=>(
                   <div key={i} style={{display:"flex",alignItems:"center",padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",gap:9}}>
                     <div style={{width:30,height:30,borderRadius:7,background:C.greenL,display:"flex",alignItems:"center",justifyContent:"center"}}><i className="ti ti-arrow-down" style={{color:C.green,fontSize:13}}/></div>
                     <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:500}}>{p.client}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{p.invoice} · {p.method} · {fmtD(p.date)}</p></div>
