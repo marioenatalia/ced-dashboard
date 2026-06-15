@@ -331,6 +331,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [tab, setTab]               = useState("dashboard");
       const [selected, setSelected]     = useState(null);
       const [filterS, setFilterS]       = useState("tutti");
+      const [search, setSearch]         = useState("");
       const [showPay, setShowPay]       = useState(false);
       const [payAmt, setPayAmt]         = useState("");
       const [payMth, setPayMth]         = useState("bonifico");
@@ -414,10 +415,12 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         return { cashflow, incassiMensili:inc, aging, topSoff, dso, openCount:openInv.length, incassato6m:inc.reduce((s,x)=>s+x.value,0) };
       })();
 
-      const filtered  = filterS==="tutti" ? invoices
+      const _byStatus = filterS==="tutti" ? invoices
                        : filterS==="storico" ? invoices.filter(isStorico)
                        : filterS==="scaduto" ? invoices.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; })
                        : invoices.filter(i=>i.status===filterS);
+      const _q = search.trim().toLowerCase();
+      const filtered  = _q ? _byStatus.filter(i=>(i.client||"").toLowerCase().includes(_q) || (i.id||"").toLowerCase().includes(_q)) : _byStatus;
 
       // Wrapper AI che inietta la API key
       const callAIWithKey = async (messages, system) => {
@@ -1181,6 +1184,12 @@ In italiano, con numeri ed euro.`,
           {/* ══ FATTURE ══ */}
           {tab==="fatture" && (
             <div>
+              <div style={{position:"relative",marginBottom:10}}>
+                <i className="ti ti-search" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--color-text-secondary)"}}/>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cerca cliente o numero proforma..." style={{width:"100%",padding:"9px 34px 9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                {search && <button onClick={()=>setSearch("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:15}}><i className="ti ti-x"/></button>}
+              </div>
+              {search && <p style={{margin:"0 0 10px",fontSize:11,color:"var(--color-text-secondary)"}}>{filtered.length} risultati per "{search}"</p>}
               <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
                 {["tutti","pagato","parziale","attesa","scaduto","storico"].map(s=>{
                   const col = s==="tutti"?C.blue : s==="storico"?C.coral : STATUS[s]?.c;
