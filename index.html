@@ -370,6 +370,10 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [cliFiles, setCliFiles]     = useState({});   // name -> {loading, open:[], paid:[]}
       const [excelStatus, setExcelStatus] = useState(()=>LS.raw("ced_excel_at")?("done"):"idle");
       const [excelInfo, setExcelInfo]   = useState(()=>LS.get("ced_excel_info",null)); // {attivi,usciti,totale,at}
+      const [recoStatus, setRecoStatus] = useState("idle");
+      const [recoProg, setRecoProg]     = useState({done:0,total:0});
+      const [recoRows, setRecoRows]     = useState(()=>LS.get("ced_reco_rows",[]));
+      const [recoFilter, setRecoFilter] = useState("mancanti"); // mancanti|tutti
 
       const totale    = invoices.reduce((s,i)=>s+i.amount,0);
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
@@ -895,6 +899,72 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         } catch(e){ setExcelStatus("error"); alert("Errore import Excel: "+e.message); }
       };
 
+      // ── RICONCILIAZIONE: legge le proforma 2026 da Yandex e le incrocia con l'Excel ──
+      const inWhitelist = name => {
+        const wl = LS.get("ced_whitelist", []); if(!wl.length) return null;
+        const n = normName(name); if(!n) return false;
+        return wl.some(w => w===n || w.startsWith(n.slice(0,6)) || n.startsWith(w.slice(0,6)));
+      };
+      const recoRef = useRef({ stop:false });
+      const runReconciliation = useCallback(async()=>{
+        if (!ydToken) { setYdError("Token Yandex mancante"); return; }
+        if (!LS.raw("ced_api_key")) { setYdError("API key Anthropic non configurata"); return; }
+        recoRef.current.stop=false; setRecoStatus("running");
+        const log=[]; const addLog=(m,t="info")=>{log.push({msg:m,type:t,ts:new Date().toLocaleTimeString("it-IT")}); setSyncLog([...log]);};
+        addLog("Riconciliazione: raccolta proforma 2026 da Yandex...");
+        // 1) raccogli PDF 2026 (cartella cliente + sottocartelle, salta EX CLIENTI)
+        const pdfs=[];
+        const walk=async(path,depth,clientFolder)=>{
+          if(recoRef.current.stop||depth>3) return;
+          let d; try{ d=await ydList(ydToken,path);}catch(e){return;}
+          for(const it of (d._embedded?.items||[])){
+            if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf") && it.name.includes("2026"))
+              pdfs.push({path:it.path,name:it.name,folder:clientFolder||basenameOf(path),paid:/pagat|saldat/i.test(path)});
+            else if(it.type==="dir"){
+              if(depth===0 && /ex\s*clienti/i.test(it.name)) continue;
+              await walk(it.path, depth+1, depth>=1?(clientFolder||basenameOf(path)) : it.name);
+            }
+          }
+        };
+        function basenameOf(p){ return p.replace(/\/+$/,"").split("/").pop(); }
+        try{
+          const root=await ydList(ydToken,"/");
+          for(const t of (root._embedded?.items||[]).filter(i=>i.type==="dir")){
+            if(recoRef.current.stop) break;
+            if(/ex\s*clienti/i.test(t.name)) continue;
+            await walk(t.path,1,null);
+          }
+        }catch(e){ addLog("Errore scansione: "+e.message,"error"); }
+        addLog(`Trovate ${pdfs.length} proforma 2026. Lettura AI...`);
+        setRecoProg({done:0,total:pdfs.length});
+        const rows=[]; let done=0;
+        for(const it of pdfs){
+          if(recoRef.current.stop){ addLog("⏹ Interrotto","skip"); break; }
+          try{
+            const { buf } = await downloadAndStorePdf(ydToken, it.path, it.name);
+            const b64=bufToB64(buf);
+            const d=await callAIWithKey([{role:"user",content:[
+              {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
+              {type:"text",text:`Parcella/proforma italiana studio CED. Dalla CAUSALE ricava il periodo di competenza. Rispondi SOLO JSON: {"cliente":"...","data_emissione":"YYYY-MM-DD","periodo":"I trimestre|II trimestre|III trimestre|IV trimestre|annuale|mensile|bilancio|altro","competenza":"causale","importo_imponibile":0.00,"importo_totale":0.00}`}
+            ]}], null, MODEL_EXTRACT).then(raw=>{ try{return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim());}catch{return null;} });
+            const wl=inWhitelist(it.folder);
+            const row={ file:it.name, folder:it.folder, paid:it.paid,
+              cliente:d?.cliente||it.folder, data:d?.data_emissione||"", periodo:d?.periodo||"?",
+              competenza:d?.competenza||"", imponibile:d?.importo_imponibile||0, totale:d?.importo_totale||0,
+              inExcel: wl===true, parseFail:!d };
+            rows.push(row); done++;
+            if(done%5===0||done===pdfs.length){ setRecoRows([...rows]); }
+            setRecoProg({done,total:pdfs.length});
+            if(!row.inExcel) addLog(`🔴 ${row.cliente} — ${row.periodo} ${fmt(row.totale)} — NON in Excel`,"error");
+          }catch(e){ done++; setRecoProg({done,total:pdfs.length}); }
+        }
+        setRecoRows([...rows]); LS.set("ced_reco_rows", rows);
+        const miss=rows.filter(r=>!r.inExcel); const missTot=miss.reduce((s,r)=>s+(r.totale||0),0);
+        addLog(`Riconciliazione completata: ${rows.length} lette · ${miss.length} fuori Excel (${fmt(missTot)})`,"ok");
+        LS.set("ced_sync_log", log);
+        setRecoStatus(recoRef.current.stop?"idle":"done");
+      }, [ydToken]);
+
       const ydBrowse = useCallback(async(path, token)=>{
         const t=token||ydToken; if(!t) return;
         setYdLoading(true); setYdError("");
@@ -1112,6 +1182,7 @@ In italiano, con numeri ed euro.`,
         {id:"dashboard",label:"Dashboard", icon:"ti-layout-dashboard"},
         {id:"fatture",  label:"Proforma",  icon:"ti-file-invoice"},
         {id:"clienti",  label:"Clienti",   icon:"ti-users"},
+        {id:"riconcilia",label:"Riconcilia",icon:"ti-arrows-diff"},
         {id:"pagamenti",label:"Pagamenti", icon:"ti-credit-card"},
         {id:"yandex",   label:"Archivio",  icon:"ti-cloud"},
         {id:"sync",     label:"Sync Auto", icon:"ti-refresh"},
@@ -1489,6 +1560,56 @@ In italiano, con numeri ed euro.`,
                   <button onClick={()=>setTab("sync")} style={{padding:"8px 16px",background:C.teal,color:"white",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Vai a Sync Auto</button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ══ RICONCILIAZIONE ══ */}
+          {tab==="riconcilia" && (
+            <div>
+              <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:14,padding:"16px 18px",marginBottom:12,boxShadow:"var(--shadow-card)"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <i className="ti ti-arrows-diff" style={{fontSize:18,color:S.slateD}}/><h3 style={{margin:0,fontSize:14,fontWeight:600}}>Riconciliazione Yandex ↔ Excel</h3>
+                </div>
+                <p style={{margin:"0 0 10px",fontSize:12,color:"var(--color-text-secondary)"}}>Legge le proforma 2026 da Yandex (con AI Haiku) ed estrae cliente · data · periodo · importo, poi le incrocia con l'Excel per trovare gli scostamenti. Costo stimato ~€0,003 per documento.</p>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={runReconciliation} disabled={recoStatus==="running"||!ydToken} style={{padding:"9px 18px",background:recoStatus==="running"?C.grayL:S.slateD,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:recoStatus==="running"||!ydToken?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:6}}>
+                    <i className={`ti ${recoStatus==="running"?"ti-loader-2 ti-spin":"ti-scan"}`}/>{recoStatus==="running"?"Lettura in corso...":"Avvia riconciliazione"}
+                  </button>
+                  {recoStatus==="running" && <button onClick={()=>{recoRef.current.stop=true; setRecoStatus("idle");}} style={{padding:"9px 14px",background:C.redL,color:C.red,border:`1px solid ${C.red}33`,borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Stop</button>}
+                  {recoStatus==="running" && recoProg.total>0 && <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>{recoProg.done}/{recoProg.total}</span>}
+                  {!LS.raw("ced_whitelist") && <span style={{fontSize:11,color:C.red}}>⚠ Importa prima l'Excel (tab Sync Auto)</span>}
+                </div>
+              </div>
+
+              {recoRows.length>0 && (()=>{
+                const miss=recoRows.filter(r=>!r.inExcel); const missTot=miss.reduce((s,r)=>s+(r.totale||0),0);
+                const view = recoFilter==="mancanti" ? miss : recoRows;
+                return (<>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
+                    <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>PROFORMA LETTE</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{recoRows.length}</p></div>
+                    <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>FUORI EXCEL</p><p style={{margin:0,fontSize:19,fontWeight:700,color:S.warn}}>{miss.length}</p></div>
+                    <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>IMPORTO FUORI EXCEL</p><p style={{margin:0,fontSize:17,fontWeight:700,color:S.warn}}>{fmt(missTot)}</p></div>
+                  </div>
+                  <div style={{display:"flex",gap:6,marginBottom:10}}>
+                    {[["mancanti",`Solo fuori Excel (${miss.length})`],["tutti",`Tutte (${recoRows.length})`]].map(([k,l])=>(
+                      <button key={k} onClick={()=>setRecoFilter(k)} style={{padding:"5px 12px",borderRadius:20,border:recoFilter===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:recoFilter===k?S.slateD+"15":"transparent",color:recoFilter===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:recoFilter===k?600:400}}>{l}</button>
+                    ))}
+                  </div>
+                  <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
+                    {view.map((r,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
+                        <div style={{width:8,height:8,borderRadius:"50%",background:r.inExcel?S.good:S.warn,flexShrink:0}}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.cliente}</p>
+                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}</p>
+                        </div>
+                        <span style={{fontSize:13,fontWeight:600,color:r.inExcel?"var(--color-text-primary)":S.warn}}>{fmt(r.totale)}</span>
+                      </div>
+                    ))}
+                    {view.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:18}}>Nessuna proforma in questa vista.</p>}
+                  </div>
+                </>);
+              })()}
             </div>
           )}
 
