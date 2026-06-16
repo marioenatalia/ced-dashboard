@@ -1761,12 +1761,16 @@ In italiano, con numeri ed euro.`,
                           <tr key={c.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)",background:c.stato==="uscito"?C.coralL+"55":(ri%2?"var(--color-background-secondary)":"transparent")}}>
                             <td style={{padding:"6px 10px",position:"sticky",left:0,background:"inherit",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:180}} title={c.tariffa||""}>{c.nome}{c.stato==="uscito"&&<span style={{fontSize:9,color:C.coral,marginLeft:4}}>uscito</span>}</td>
                             <td style={{padding:"3px 4px"}}><input defaultValue={c.arretrati||""} onBlur={e=>{const v=parseFloat(e.target.value)||0; if(v!==Number(c.arretrati)) saveArretrati(c,v);}} style={{width:58,padding:"4px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/></td>
-                            {periods.map(per=>{ const p=pf(c.id,per); const paid=p?.pagato; return (
+                            {periods.map(per=>{ const p=pf(c.id,per); const paid=p?.pagato; const imp=Number(p?.importo)||0; return (
                               <td key={per} style={{padding:"3px 4px",textAlign:"center"}}>
-                                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
-                                  <input defaultValue={p?.importo||""} key={(p?.importo||"")+per+c.id} onBlur={e=>{const v=parseFloat(e.target.value)||0; if(v!==Number(p?.importo||0)) saveCell(c,per,{importo:v});}} style={{width:58,padding:"4px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:paid?S.good+"22":"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/>
-                                  <button onClick={()=>saveCell(c,per,{pagato:!paid})} title="Segna pagato/non pagato" style={{fontSize:8,padding:"1px 5px",borderRadius:4,border:"none",cursor:"pointer",background:paid?S.good:"var(--color-background-secondary)",color:paid?"#fff":"var(--color-text-secondary)"}}>{paid?"PAGATO":"paga"}</button>
-                                </div>
+                                {paid ? (
+                                  <button onClick={()=>saveCell(c,per,{pagato:false})} title="Annulla pagato" style={{width:62,padding:"6px 2px",borderRadius:5,border:"none",cursor:"pointer",background:S.good,color:"#fff",fontSize:9,fontWeight:600,lineHeight:1.2}}>✓ PAGATO{imp>0?<><br/>{fmt(imp)}</>:null}</button>
+                                ) : (
+                                  <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
+                                    <input defaultValue={imp||""} key={imp+per+c.id} placeholder="—" onBlur={e=>{const v=parseFloat(e.target.value)||0; if(v!==imp) saveCell(c,per,{importo:v});}} style={{width:58,padding:"4px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/>
+                                    <button onClick={()=>saveCell(c,per,{pagato:true})} title="Segna pagato" style={{fontSize:8,padding:"1px 6px",borderRadius:4,border:"none",cursor:"pointer",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)"}}>paga</button>
+                                  </div>
+                                )}
                               </td>
                             );})}
                             <td style={{padding:"6px 8px",textAlign:"right",fontWeight:600,color:cliDue(c)>0?S.warn:S.good}}>{fmt(cliDue(c))}</td>
