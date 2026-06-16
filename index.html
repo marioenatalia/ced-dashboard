@@ -1010,6 +1010,11 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         setFoglioLoad(false);
       },[]);
 
+      // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
+      useEffect(()=>{
+        if(tab==="foglio" && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
+      }, [tab]);
+
       const saveCell = async(cliente, periodo, patch)=>{
         // trova proforma esistente
         const ex = foglio.proforme.find(p=>p.cliente_id===cliente.id && p.anno===2026 && p.periodo===periodo);
