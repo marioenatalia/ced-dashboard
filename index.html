@@ -1738,7 +1738,47 @@ In italiano, con numeri ed euro.`,
                 const totDue=clienti.reduce((s,c)=>s+cliDue(c),0);
                 const colTot={}; periods.forEach(per=>{ colTot[per]=clienti.reduce((s,c)=>{ const p=pf(c.id,per); return s+(Number(p?.importo)||0); },0); });
                 const arrTot=clienti.reduce((s,c)=>s+(Number(c.arretrati)||0),0);
+                // Riepilogo per categoria (tutti)
+                const riepilogo=cats.map(([k,l])=>{
+                  const cls=foglio.clienti.filter(c=>c.categoria===k); const ids=new Set(cls.map(c=>c.id));
+                  const pfs=foglio.proforme.filter(p=>ids.has(p.cliente_id));
+                  const arr=cls.reduce((s,c)=>s+(Number(c.arretrati)||0),0);
+                  const inc=pfs.filter(p=>!p.pagato).reduce((s,p)=>s+(Number(p.importo)||0),0);
+                  const pagati=pfs.filter(p=>p.pagato).length;
+                  const aperte=pfs.filter(p=>!p.pagato && Number(p.importo)>0).length;
+                  return {k,l,n:cls.length,arr,inc,pagati,aperte,tot:arr+inc};
+                });
+                const RT=riepilogo.reduce((a,r)=>({n:a.n+r.n,arr:a.arr+r.arr,inc:a.inc+r.inc,pagati:a.pagati+r.pagati,aperte:a.aperte+r.aperte,tot:a.tot+r.tot}),{n:0,arr:0,inc:0,pagati:0,aperte:0,tot:0});
                 return (<>
+                  {/* RIEPILOGO PER CATEGORIA */}
+                  <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",marginBottom:12,boxShadow:"var(--shadow-card)"}}>
+                    <p style={{margin:"0 0 8px",fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}><i className="ti ti-clipboard-check" style={{color:S.slateD}}/>Riepilogo dati caricati</p>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{borderCollapse:"collapse",width:"100%",fontSize:11.5,minWidth:520}}>
+                        <thead><tr style={{color:"var(--color-text-secondary)",textAlign:"right"}}>
+                          <th style={{textAlign:"left",padding:"4px 6px"}}>Categoria</th><th style={{padding:"4px 6px"}}>Clienti</th><th style={{padding:"4px 6px"}}>Proforme aperte</th><th style={{padding:"4px 6px"}}>Pagati</th><th style={{padding:"4px 6px"}}>Arretrati</th><th style={{padding:"4px 6px"}}>Da incassare</th><th style={{padding:"4px 6px"}}>TOTALE</th>
+                        </tr></thead>
+                        <tbody>
+                          {riepilogo.map(r=>(
+                            <tr key={r.k} style={{borderTop:"0.5px solid var(--color-border-tertiary)",textAlign:"right"}}>
+                              <td style={{textAlign:"left",padding:"5px 6px",fontWeight:500}}>{r.l}</td>
+                              <td style={{padding:"5px 6px"}}>{r.n}</td>
+                              <td style={{padding:"5px 6px"}}>{r.aperte}</td>
+                              <td style={{padding:"5px 6px",color:S.good}}>{r.pagati}</td>
+                              <td style={{padding:"5px 6px"}}>{r.arr?fmt(r.arr):"—"}</td>
+                              <td style={{padding:"5px 6px",color:S.warn}}>{r.inc?fmt(r.inc):"—"}</td>
+                              <td style={{padding:"5px 6px",fontWeight:600,color:S.slateD}}>{fmt(r.tot)}</td>
+                            </tr>
+                          ))}
+                          <tr style={{borderTop:`2px solid ${S.slateD}`,textAlign:"right",fontWeight:700}}>
+                            <td style={{textAlign:"left",padding:"6px",color:S.slateD}}>TOTALE</td>
+                            <td style={{padding:"6px"}}>{RT.n}</td><td style={{padding:"6px"}}>{RT.aperte}</td><td style={{padding:"6px",color:S.good}}>{RT.pagati}</td>
+                            <td style={{padding:"6px"}}>{fmt(RT.arr)}</td><td style={{padding:"6px",color:S.warn}}>{fmt(RT.inc)}</td><td style={{padding:"6px",color:S.slateD}}>{fmt(RT.tot)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                   <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
                     {cats.map(([k,l])=>(
                       <button key={k} onClick={()=>setFoglioCat(k)} style={{padding:"5px 12px",borderRadius:20,border:foglioCat===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:foglioCat===k?S.slateD+"15":"transparent",color:foglioCat===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:foglioCat===k?600:400}}>{l} ({foglio.clienti.filter(c=>c.categoria===k).length})</button>
