@@ -166,6 +166,22 @@
     const now  = () => new Date().toISOString();
     const todayStr = () => new Date().toISOString().split("T")[0];
 
+    // ── Supabase (REST) — URL + publishable key salvati in localStorage ──
+    const sbCfg = () => ({ url:(localStorage.getItem("ced_sb_url")||"").replace(/\/+$/,""), key:localStorage.getItem("ced_sb_key")||"" });
+    const sbReady = () => { const c=sbCfg(); return !!(c.url && c.key); };
+    async function sbReq(method, pathQ, body) {
+      const c = sbCfg(); if(!c.url||!c.key) throw new Error("Supabase non configurato");
+      const h = { "apikey":c.key, "Authorization":"Bearer "+c.key, "Content-Type":"application/json" };
+      if (method!=="GET") h["Prefer"]="return=representation";
+      const r = await fetch(c.url+"/rest/v1/"+pathQ, { method, headers:h, body: body?JSON.stringify(body):undefined });
+      if (!r.ok) throw new Error("Supabase "+r.status+": "+(await r.text()).slice(0,200));
+      const t = await r.text(); return t?JSON.parse(t):null;
+    }
+    const sbGet    = (table,q="") => sbReq("GET", table+"?"+q);
+    const sbInsert = (table,rows)  => sbReq("POST", table, rows);
+    const sbUpdate = (table,q,patch)=> sbReq("PATCH", table+"?"+q, patch);
+    const sbDelete = (table,q)     => sbReq("DELETE", table+"?"+q);
+
     // Giorni di ritardo (riferimento: scadenza, fallback emissione). Negativo = non ancora scaduta.
     const overdueDays = inv => {
       const ref = inv.due || inv.date; if(!ref) return null;
@@ -374,6 +390,14 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [recoProg, setRecoProg]     = useState({done:0,total:0});
       const [recoRows, setRecoRows]     = useState(()=>LS.get("ced_reco_rows",[]));
       const [recoFilter, setRecoFilter] = useState("mancanti"); // mancanti|tutti
+      // Foglio Pagamenti (Supabase)
+      const [sbUrl, setSbUrl]           = useState(()=>localStorage.getItem("ced_sb_url")||"");
+      const [sbKey, setSbKey]           = useState(()=>localStorage.getItem("ced_sb_key")||"");
+      const [foglio, setFoglio]         = useState({clienti:[],proforme:[]});
+      const [foglioCat, setFoglioCat]   = useState("focus");
+      const [foglioLoad, setFoglioLoad] = useState(false);
+      const [foglioSeed, setFoglioSeed] = useState("idle");
+      const [foglioMsg, setFoglioMsg]   = useState("");
 
       const totale    = invoices.reduce((s,i)=>s+i.amount,0);
       const incassato = invoices.reduce((s,i)=>s+i.paid,0);
@@ -972,6 +996,105 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         setRecoStatus(recoRef.current.stop?"idle":"done");
       }, [ydToken]);
 
+      // ── FOGLIO PAGAMENTI (Supabase) ──
+      const PERIODI = { focus:["I","II","III","IV"], ragazzi:["I_SEM","II_SEM","ANNO"], altri:["GEN","FEB","MAR","APR","MAG","GIU","LUG","AGO","SET","OTT","NOV","DIC"] };
+      const PLABEL = { I:"I Trim",II:"II Trim",III:"III Trim",IV:"IV Trim",I_SEM:"I Sem",II_SEM:"II Sem",ANNO:"Annuale",GEN:"Gen",FEB:"Feb",MAR:"Mar",APR:"Apr",MAG:"Mag",GIU:"Giu",LUG:"Lug",AGO:"Ago",SET:"Set",OTT:"Ott",NOV:"Nov",DIC:"Dic",BILANCIO:"Bilancio" };
+      const loadFoglio = useCallback(async()=>{
+        if(!sbReady()){ setFoglioMsg("Configura prima URL e chiave Supabase."); return; }
+        setFoglioLoad(true); setFoglioMsg("");
+        try{
+          const clienti = await sbGet("clienti","select=*&order=categoria,nome");
+          const proforme = await sbGet("proforme","select=*&limit=20000");
+          setFoglio({clienti,proforme});
+        }catch(e){ setFoglioMsg("Errore caricamento: "+e.message); }
+        setFoglioLoad(false);
+      },[]);
+
+      const saveCell = async(cliente, periodo, patch)=>{
+        // trova proforma esistente
+        const ex = foglio.proforme.find(p=>p.cliente_id===cliente.id && p.anno===2026 && p.periodo===periodo);
+        try{
+          if(ex){
+            const upd = await sbUpdate("proforme",`id=eq.${ex.id}`,patch);
+            setFoglio(f=>({...f, proforme:f.proforme.map(p=>p.id===ex.id?{...p,...patch}:p)}));
+          } else {
+            const ins = await sbInsert("proforme",[{cliente_id:cliente.id,anno:2026,periodo,...patch}]);
+            setFoglio(f=>({...f, proforme:[...f.proforme, ins[0]]}));
+          }
+        }catch(e){ setFoglioMsg("Errore salvataggio: "+e.message); }
+      };
+      const saveArretrati = async(cliente, val)=>{
+        try{ await sbUpdate("clienti",`id=eq.${cliente.id}`,{arretrati:val});
+          setFoglio(f=>({...f, clienti:f.clienti.map(c=>c.id===cliente.id?{...c,arretrati:val}:c)})); }
+        catch(e){ setFoglioMsg("Errore: "+e.message); }
+      };
+      const addCliente = async()=>{
+        const nome = prompt("Nome nuovo cliente:"); if(!nome) return;
+        try{ const ins=await sbInsert("clienti",[{nome,categoria:foglioCat}]); setFoglio(f=>({...f,clienti:[...f.clienti,ins[0]]})); }
+        catch(e){ setFoglioMsg("Errore: "+e.message); }
+      };
+      const delCliente = async(c)=>{
+        if(!confirm(`Eliminare ${c.nome} e tutte le sue proforma?`)) return;
+        try{ await sbDelete("clienti",`id=eq.${c.id}`); setFoglio(f=>({clienti:f.clienti.filter(x=>x.id!==c.id),proforme:f.proforme.filter(p=>p.cliente_id!==c.id)})); }
+        catch(e){ setFoglioMsg("Errore: "+e.message); }
+      };
+
+      // Seed: parse Excel (per-periodo) e popola Supabase. Svuota prima per evitare duplicati.
+      const seedFoglio = async(file)=>{
+        if(!sbReady()){ setFoglioMsg("Configura Supabase prima del seed."); return; }
+        if(!window.XLSX){ setFoglioMsg("Libreria Excel non caricata."); return; }
+        if(!confirm("Importare l'Excel nel database? Verranno SOSTITUITI i dati attuali del foglio (clienti+proforme).")) return;
+        setFoglioSeed("running"); setFoglioMsg("");
+        try{
+          const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:"array"});
+          const grid=n=>{ const ws=wb.Sheets[n]; return ws?XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""}):[]; };
+          // svuota
+          await sbDelete("proforme","id=not.is.null");
+          await sbDelete("clienti","id=not.is.null");
+          // bilancio non pagati -> 600
+          const bilset=new Set();
+          (grid("BILANCIO")||[]).slice(1).forEach(r=>{ const nm=String(r[0]||"").trim(); if(nm.length<2) return; const flags=r.slice(1).join(" ").toUpperCase(); if(!flags.includes("PAGAT")) bilset.add(normName(nm)); });
+          const hasBil=nm=>{ const n=normName(nm); return [...bilset].some(b=>b===n||b.startsWith(n.slice(0,6))||n.startsWith(b.slice(0,6))); };
+          let nC=0,nP=0;
+          const pushClient = async(nome,categoria,arretrati,tariffa,inact,periods)=>{
+            const ins=await sbInsert("clienti",[{nome,categoria,arretrati:arretrati||0,tariffa:tariffa||"",stato:inact?"uscito":"attivo"}]);
+            const cid=ins[0].id; nC++;
+            const rows=[];
+            for(const [periodo,importo,pagato] of periods){ if(importo>0||pagato) rows.push({cliente_id:cid,anno:2026,periodo,importo:importo||0,pagato:!!pagato}); }
+            if(hasBil(nome)) rows.push({cliente_id:cid,anno:2026,periodo:"BILANCIO",importo:600,pagato:false});
+            if(rows.length){ await sbInsert("proforme",rows); nP+=rows.length; }
+          };
+          // FOCUS
+          for(const r of (grid("FOCUS")||[]).slice(1)){
+            const nm=String(r[1]||"").trim(); if(nm.length<3) continue;
+            const note=String(r[7]||"").trim();
+            const cells=[r[2],r[3],r[4],r[5],r[6]];
+            const inact=isInact(note)||cells.some(isInact);
+            const arr=xlsNum(r[2]);
+            const periods=[["I",isPag(r[3])?0:xlsNum(r[3]),isPag(r[3])],["II",isPag(r[4])?0:xlsNum(r[4]),isPag(r[4])],["III",isPag(r[5])?0:xlsNum(r[5]),isPag(r[5])],["IV",isPag(r[6])?0:xlsNum(r[6]),isPag(r[6])]];
+            await pushClient(nm,"focus",arr,note,inact,periods);
+          }
+          // ALTRI (mesi GEN.. da col4)
+          const mcodes=PERIODI.altri;
+          for(const r of (grid("ALTRI")||[]).slice(1)){
+            const nm=String(r[1]||"").trim(); if(nm.length<3||["MENSILI","BIMESTRALE"].includes(nm.toUpperCase())) continue;
+            const note=String(r[2]||"").trim(); const arr=xlsNum(r[3]);
+            const inact=isInact(note);
+            const periods=[]; for(let i=0;i<mcodes.length;i++){ const v=r[4+i]; if(v===undefined) break; periods.push([mcodes[i], isPag(v)?0:xlsNum(v), isPag(v)]); }
+            await pushClient(nm,"altri",arr,note,inact,periods);
+          }
+          // RAGAZZI
+          for(const r of (grid("RAGAZZI")||[]).slice(1)){
+            const a=String(r[1]||"").trim();
+            if(a.length>2) await pushClient(a,"ragazzi",0,"semestre",false,[["I_SEM",isPag(r[2])?0:xlsNum(r[2]),isPag(r[2])],["II_SEM",isPag(r[3])?0:xlsNum(r[3]),isPag(r[3])]]);
+            const b=String(r[6]||"").trim();
+            if(b.length>2) await pushClient(b,"ragazzi",0,"annuale",false,[["ANNO",xlsNum(r[5]),false]]);
+          }
+          setFoglioSeed("done"); setFoglioMsg(`Importati ${nC} clienti e ${nP} proforma nel database.`);
+          await loadFoglio();
+        }catch(e){ setFoglioSeed("error"); setFoglioMsg("Errore seed: "+e.message); }
+      };
+
       const ydBrowse = useCallback(async(path, token)=>{
         const t=token||ydToken; if(!t) return;
         setYdLoading(true); setYdError("");
@@ -1189,6 +1312,7 @@ In italiano, con numeri ed euro.`,
         {id:"dashboard",label:"Dashboard", icon:"ti-layout-dashboard"},
         {id:"fatture",  label:"Proforma",  icon:"ti-file-invoice"},
         {id:"clienti",  label:"Clienti",   icon:"ti-users"},
+        {id:"foglio",   label:"Foglio",    icon:"ti-table"},
         {id:"riconcilia",label:"Riconcilia",icon:"ti-arrows-diff"},
         {id:"pagamenti",label:"Pagamenti", icon:"ti-credit-card"},
         {id:"yandex",   label:"Archivio",  icon:"ti-cloud"},
@@ -1567,6 +1691,85 @@ In italiano, con numeri ed euro.`,
                   <button onClick={()=>setTab("sync")} style={{padding:"8px 16px",background:C.teal,color:"white",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>Vai a Sync Auto</button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ══ FOGLIO PAGAMENTI (Supabase) ══ */}
+          {tab==="foglio" && (
+            <div>
+              {/* Config Supabase */}
+              {!sbReady() ? (
+                <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:14,padding:"16px 18px",marginBottom:12,boxShadow:"var(--shadow-card)"}}>
+                  <h3 style={{margin:"0 0 6px",fontSize:14,fontWeight:600}}>Connetti Supabase</h3>
+                  <p style={{margin:"0 0 10px",fontSize:12,color:"var(--color-text-secondary)"}}>Incolla Project URL e Publishable key (vengono salvati solo nel tuo browser).</p>
+                  <input value={sbUrl} onChange={e=>setSbUrl(e.target.value)} placeholder="https://xxxx.supabase.co" style={{width:"100%",padding:"9px 12px",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12,fontFamily:"monospace",marginBottom:8,boxSizing:"border-box"}}/>
+                  <input value={sbKey} onChange={e=>setSbKey(e.target.value)} placeholder="sb_publishable_..." style={{width:"100%",padding:"9px 12px",borderRadius:9,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12,fontFamily:"monospace",marginBottom:10,boxSizing:"border-box"}}/>
+                  <button onClick={()=>{ localStorage.setItem("ced_sb_url",sbUrl.trim()); localStorage.setItem("ced_sb_key",sbKey.trim()); loadFoglio(); }} style={{padding:"9px 18px",background:S.slateD,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>Connetti</button>
+                </div>
+              ) : (
+                <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={loadFoglio} disabled={foglioLoad} style={{padding:"8px 14px",background:S.slateD,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><i className={`ti ti-refresh ${foglioLoad?"ti-spin":""}`}/>{foglioLoad?"Carico...":"Ricarica"}</button>
+                  <button onClick={addCliente} style={{padding:"8px 14px",background:S.good+"18",color:S.good,border:`1px solid ${S.good}44`,borderRadius:8,fontSize:12,fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><i className="ti ti-user-plus"/> Cliente</button>
+                  <label style={{padding:"8px 14px",background:"transparent",border:`1px solid ${S.slateD}55`,color:S.slateD,borderRadius:8,fontSize:12,fontWeight:500,cursor:foglioSeed==="running"?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:5}}>
+                    <i className={`ti ${foglioSeed==="running"?"ti-loader-2 ti-spin":"ti-database-import"}`}/>{foglioSeed==="running"?"Importo...":"Importa da Excel"}
+                    <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) seedFoglio(f); e.target.value="";}}/>
+                  </label>
+                  <button onClick={()=>{ localStorage.removeItem("ced_sb_url"); localStorage.removeItem("ced_sb_key"); setSbUrl(""); setSbKey(""); setFoglio({clienti:[],proforme:[]}); }} style={{marginLeft:"auto",padding:"8px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)"}}>Disconnetti</button>
+                </div>
+              )}
+              {foglioMsg && <p style={{margin:"0 0 10px",fontSize:11,color:foglioMsg.startsWith("Errore")?C.red:S.good,background:(foglioMsg.startsWith("Errore")?C.redL:S.good+"15"),padding:"7px 10px",borderRadius:7}}>{foglioMsg}</p>}
+
+              {sbReady() && (()=>{
+                const cats=[["focus","Focus (trim.)"],["altri","Altri (mensili)"],["ragazzi","Ragazzi"]];
+                const periods=PERIODI[foglioCat];
+                const clienti=foglio.clienti.filter(c=>c.categoria===foglioCat);
+                const pf=(cid,per)=>foglio.proforme.find(p=>p.cliente_id===cid&&p.periodo===per);
+                const cliDue=c=>{ let d=Number(c.arretrati)||0; foglio.proforme.forEach(p=>{ if(p.cliente_id===c.id&&!p.pagato) d+=Number(p.importo)||0; }); return d; };
+                const totDue=clienti.reduce((s,c)=>s+cliDue(c),0);
+                return (<>
+                  <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+                    {cats.map(([k,l])=>(
+                      <button key={k} onClick={()=>setFoglioCat(k)} style={{padding:"5px 12px",borderRadius:20,border:foglioCat===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:foglioCat===k?S.slateD+"15":"transparent",color:foglioCat===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:foglioCat===k?600:400}}>{l} ({foglio.clienti.filter(c=>c.categoria===k).length})</button>
+                    ))}
+                    <span style={{marginLeft:"auto",fontSize:12,color:"var(--color-text-secondary)"}}>Da incassare: <b style={{color:S.warn}}>{fmt(totDue)}</b></span>
+                  </div>
+                  <div style={{overflowX:"auto",background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,boxShadow:"var(--shadow-card)"}}>
+                    <table style={{borderCollapse:"collapse",width:"100%",fontSize:12,minWidth:600}}>
+                      <thead>
+                        <tr style={{background:S.slateD,color:"#fff"}}>
+                          <th style={{padding:"8px 10px",textAlign:"left",position:"sticky",left:0,background:S.slateD,minWidth:160}}>Cliente</th>
+                          <th style={{padding:"8px 8px"}}>Arretr.</th>
+                          {periods.map(p=><th key={p} style={{padding:"8px 8px",minWidth:62}}>{PLABEL[p]}</th>)}
+                          <th style={{padding:"8px 8px"}}>Bilancio</th>
+                          <th style={{padding:"8px 8px"}}>Residuo</th>
+                          <th style={{padding:"8px 6px"}}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clienti.map((c,ri)=>(
+                          <tr key={c.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)",background:c.stato==="uscito"?C.coralL+"55":(ri%2?"var(--color-background-secondary)":"transparent")}}>
+                            <td style={{padding:"6px 10px",position:"sticky",left:0,background:"inherit",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:180}} title={c.tariffa||""}>{c.nome}{c.stato==="uscito"&&<span style={{fontSize:9,color:C.coral,marginLeft:4}}>uscito</span>}</td>
+                            <td style={{padding:"3px 4px"}}><input defaultValue={c.arretrati||""} onBlur={e=>{const v=parseFloat(e.target.value)||0; if(v!==Number(c.arretrati)) saveArretrati(c,v);}} style={{width:58,padding:"4px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/></td>
+                            {periods.map(per=>{ const p=pf(c.id,per); const paid=p?.pagato; return (
+                              <td key={per} style={{padding:"3px 4px",textAlign:"center"}}>
+                                <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"center"}}>
+                                  <input defaultValue={p?.importo||""} key={(p?.importo||"")+per+c.id} onBlur={e=>{const v=parseFloat(e.target.value)||0; if(v!==Number(p?.importo||0)) saveCell(c,per,{importo:v});}} style={{width:58,padding:"4px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:paid?S.good+"22":"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/>
+                                  <button onClick={()=>saveCell(c,per,{pagato:!paid})} title="Segna pagato/non pagato" style={{fontSize:8,padding:"1px 5px",borderRadius:4,border:"none",cursor:"pointer",background:paid?S.good:"var(--color-background-secondary)",color:paid?"#fff":"var(--color-text-secondary)"}}>{paid?"PAGATO":"paga"}</button>
+                                </div>
+                              </td>
+                            );})}
+                            <td style={{padding:"3px 4px",textAlign:"center"}}>{(()=>{const b=pf(c.id,"BILANCIO"); return b?<span style={{fontSize:11,color:b.pagato?S.good:S.warn}} onClick={()=>saveCell(c,"BILANCIO",{pagato:!b.pagato})}>{fmt(b.importo)}{b.pagato?" ✓":""}</span>:<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>—</span>;})()}</td>
+                            <td style={{padding:"6px 8px",textAlign:"right",fontWeight:600,color:cliDue(c)>0?S.warn:S.good}}>{fmt(cliDue(c))}</td>
+                            <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delCliente(c)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,opacity:.5}}><i className="ti ti-trash"/></button></td>
+                          </tr>
+                        ))}
+                        {clienti.length===0 && <tr><td colSpan={periods.length+5} style={{padding:20,textAlign:"center",color:"var(--color-text-secondary)",fontSize:12}}>Nessun cliente in questa categoria. Usa "Importa da Excel" o "+ Cliente".</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p style={{margin:"8px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Scrivi l'importo nelle celle (salva all'uscita dal campo) · clicca "paga/PAGATO" per segnare l'incasso · dati salvati nel cloud Supabase.</p>
+                </>);
+              })()}
             </div>
           )}
 
