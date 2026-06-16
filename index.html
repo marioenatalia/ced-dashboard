@@ -135,7 +135,7 @@
     }
   </script>
 
-  <script type="text/babel" data-type="module">
+  <script type="text/plain" id="app-code">
     const { useState, useCallback, useRef, useEffect } = React;
 
     const C = {
@@ -2237,6 +2237,21 @@ In italiano, con numeri ed euro.`,
 
     const root = ReactDOM.createRoot(document.getElementById("root"));
     root.render(<CEDDashboard />);
+  </script>
+  <script>
+    // Trasforma ed esegue lo script JSX forzando il runtime CLASSICO (React.createElement),
+    // evitando l'import automatico di "react/jsx-runtime" non risolvibile nel browser.
+    (function () {
+      try {
+        var code = document.getElementById("app-code").textContent;
+        var out = Babel.transform(code, { presets: [["react", { runtime: "classic" }]] }).code;
+        (0, eval)(out);
+      } catch (e) {
+        document.getElementById("root").innerHTML =
+          '<div style="padding:20px;font-family:sans-serif;color:#a32d2d">Errore di avvio: ' + (e && e.message) + '</div>';
+        console.error(e);
+      }
+    })();
   </script>
 </body>
 </html>
