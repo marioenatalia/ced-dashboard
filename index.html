@@ -1006,6 +1006,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const clienti = await sbGet("clienti","select=*&order=categoria,nome");
           const proforme = await sbGet("proforme","select=*&limit=20000");
           setFoglio({clienti,proforme});
+          setFoglioMsg(`Caricati ${clienti.length} clienti e ${proforme.length} proforme dal cloud.`);
         }catch(e){ setFoglioMsg("Errore caricamento: "+e.message); }
         setFoglioLoad(false);
       },[]);
