@@ -997,7 +997,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       }, [ydToken]);
 
       // ── FOGLIO PAGAMENTI (Supabase) ──
-      const PERIODI = { focus:["I","II","III","IV"], ragazzi:["I_SEM","II_SEM","ANNO"], altri:["GEN","FEB","MAR","APR","MAG","GIU","LUG","AGO","SET","OTT","NOV","DIC"] };
+      const PERIODI = { focus:["I","II","III","IV"], ragazzi:["I_SEM","II_SEM","ANNO"], altri:["GEN","FEB","MAR","APR","MAG","GIU","LUG","AGO","SET","OTT","NOV","DIC"], bilancio:["BILANCIO"], nuovi:[] };
       const PLABEL = { I:"I Trim",II:"II Trim",III:"III Trim",IV:"IV Trim",I_SEM:"I Sem",II_SEM:"II Sem",ANNO:"Annuale",GEN:"Gen",FEB:"Feb",MAR:"Mar",APR:"Apr",MAG:"Mag",GIU:"Giu",LUG:"Lug",AGO:"Ago",SET:"Set",OTT:"Ott",NOV:"Nov",DIC:"Dic",BILANCIO:"Bilancio" };
       const loadFoglio = useCallback(async()=>{
         if(!sbReady()){ setFoglioMsg("Configura prima URL e chiave Supabase."); return; }
@@ -1061,7 +1061,6 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             const cid=ins[0].id; nC++;
             const rows=[];
             for(const [periodo,importo,pagato] of periods){ if(importo>0||pagato) rows.push({cliente_id:cid,anno:2026,periodo,importo:importo||0,pagato:!!pagato}); }
-            if(hasBil(nome)) rows.push({cliente_id:cid,anno:2026,periodo:"BILANCIO",importo:600,pagato:false});
             if(rows.length){ await sbInsert("proforme",rows); nP+=rows.length; }
           };
           // FOCUS
@@ -1083,12 +1082,23 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             const periods=[]; for(let i=0;i<mcodes.length;i++){ const v=r[4+i]; if(v===undefined) break; periods.push([mcodes[i], isPag(v)?0:xlsNum(v), isPag(v)]); }
             await pushClient(nm,"altri",arr,note,inact,periods);
           }
-          // RAGAZZI
+          // RAGAZZI (lista semestre col1 + lista annuale: nome col5, importo col4)
           for(const r of (grid("RAGAZZI")||[]).slice(1)){
             const a=String(r[1]||"").trim();
             if(a.length>2) await pushClient(a,"ragazzi",0,"semestre",false,[["I_SEM",isPag(r[2])?0:xlsNum(r[2]),isPag(r[2])],["II_SEM",isPag(r[3])?0:xlsNum(r[3]),isPag(r[3])]]);
-            const b=String(r[6]||"").trim();
-            if(b.length>2) await pushClient(b,"ragazzi",0,"annuale",false,[["ANNO",xlsNum(r[5]),false]]);
+            const b=String(r[5]||"").trim();
+            if(b.length>2) await pushClient(b,"ragazzi",0,"annuale",false,[["ANNO",xlsNum(r[4]),false]]);
+          }
+          // BILANCIO (foglio dedicato: 600 per azienda, pagato se flag PAGATO/DEPOSITATO)
+          for(const r of (grid("BILANCIO")||[]).slice(1)){
+            const nm=String(r[0]||"").trim(); if(nm.length<2) continue;
+            const flags=r.slice(1).join(" ").toUpperCase(); const paid=flags.includes("PAGAT")||flags.includes("DEPOSIT");
+            await pushClient(nm,"bilancio",0,"",false,[["BILANCIO",600,paid]]);
+          }
+          // NUOVI (foglio dedicato: solo nomi)
+          for(const r of (grid("nuovi")||[]).slice(1)){
+            const nm=String(r[0]||"").trim(); if(nm.length<3||nm.toUpperCase().includes("NUOVI")) continue;
+            await pushClient(nm,"nuovi",0,"",false,[]);
           }
           setFoglioSeed("done"); setFoglioMsg(`Importati ${nC} clienti e ${nP} proforma nel database.`);
           await loadFoglio();
@@ -1720,12 +1730,14 @@ In italiano, con numeri ed euro.`,
               {foglioMsg && <p style={{margin:"0 0 10px",fontSize:11,color:foglioMsg.startsWith("Errore")?C.red:S.good,background:(foglioMsg.startsWith("Errore")?C.redL:S.good+"15"),padding:"7px 10px",borderRadius:7}}>{foglioMsg}</p>}
 
               {sbReady() && (()=>{
-                const cats=[["focus","Focus (trim.)"],["altri","Altri (mensili)"],["ragazzi","Ragazzi"]];
+                const cats=[["focus","Focus (trim.)"],["altri","Altri (mensili)"],["ragazzi","Ragazzi"],["bilancio","Bilancio"],["nuovi","Nuovi"]];
                 const periods=PERIODI[foglioCat];
                 const clienti=foglio.clienti.filter(c=>c.categoria===foglioCat);
                 const pf=(cid,per)=>foglio.proforme.find(p=>p.cliente_id===cid&&p.periodo===per);
                 const cliDue=c=>{ let d=Number(c.arretrati)||0; foglio.proforme.forEach(p=>{ if(p.cliente_id===c.id&&!p.pagato) d+=Number(p.importo)||0; }); return d; };
                 const totDue=clienti.reduce((s,c)=>s+cliDue(c),0);
+                const colTot={}; periods.forEach(per=>{ colTot[per]=clienti.reduce((s,c)=>{ const p=pf(c.id,per); return s+(Number(p?.importo)||0); },0); });
+                const arrTot=clienti.reduce((s,c)=>s+(Number(c.arretrati)||0),0);
                 return (<>
                   <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
                     {cats.map(([k,l])=>(
@@ -1740,7 +1752,6 @@ In italiano, con numeri ed euro.`,
                           <th style={{padding:"8px 10px",textAlign:"left",position:"sticky",left:0,background:S.slateD,minWidth:160}}>Cliente</th>
                           <th style={{padding:"8px 8px"}}>Arretr.</th>
                           {periods.map(p=><th key={p} style={{padding:"8px 8px",minWidth:62}}>{PLABEL[p]}</th>)}
-                          <th style={{padding:"8px 8px"}}>Bilancio</th>
                           <th style={{padding:"8px 8px"}}>Residuo</th>
                           <th style={{padding:"8px 6px"}}></th>
                         </tr>
@@ -1758,13 +1769,23 @@ In italiano, con numeri ed euro.`,
                                 </div>
                               </td>
                             );})}
-                            <td style={{padding:"3px 4px",textAlign:"center"}}>{(()=>{const b=pf(c.id,"BILANCIO"); return b?<span style={{fontSize:11,color:b.pagato?S.good:S.warn}} onClick={()=>saveCell(c,"BILANCIO",{pagato:!b.pagato})}>{fmt(b.importo)}{b.pagato?" ✓":""}</span>:<span style={{fontSize:10,color:"var(--color-text-secondary)"}}>—</span>;})()}</td>
                             <td style={{padding:"6px 8px",textAlign:"right",fontWeight:600,color:cliDue(c)>0?S.warn:S.good}}>{fmt(cliDue(c))}</td>
                             <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delCliente(c)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,opacity:.5}}><i className="ti ti-trash"/></button></td>
                           </tr>
                         ))}
-                        {clienti.length===0 && <tr><td colSpan={periods.length+5} style={{padding:20,textAlign:"center",color:"var(--color-text-secondary)",fontSize:12}}>Nessun cliente in questa categoria. Usa "Importa da Excel" o "+ Cliente".</td></tr>}
+                        {clienti.length===0 && <tr><td colSpan={periods.length+4} style={{padding:20,textAlign:"center",color:"var(--color-text-secondary)",fontSize:12}}>Nessun cliente in questa categoria. Usa "Importa da Excel" o "+ Cliente".</td></tr>}
                       </tbody>
+                      {clienti.length>0 && (
+                      <tfoot>
+                        <tr style={{background:"var(--color-background-secondary)",borderTop:`2px solid ${S.slateD}`,fontWeight:700}}>
+                          <td style={{padding:"8px 10px",position:"sticky",left:0,background:"var(--color-background-secondary)",color:S.slateD}}>TOTALE COLONNA</td>
+                          <td style={{padding:"8px 4px",textAlign:"right",color:S.slateD,fontSize:11}}>{fmt(arrTot)}</td>
+                          {periods.map(per=><td key={per} style={{padding:"8px 4px",textAlign:"right",color:S.slateD,fontSize:11}}>{fmt(colTot[per])}</td>)}
+                          <td style={{padding:"8px 8px",textAlign:"right",color:S.warn,fontSize:12}}>{fmt(totDue)}</td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
+                      )}
                     </table>
                   </div>
                   <p style={{margin:"8px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Scrivi l'importo nelle celle (salva all'uscita dal campo) · clicca "paga/PAGATO" per segnare l'incasso · dati salvati nel cloud Supabase.</p>
