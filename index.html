@@ -1013,7 +1013,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
       useEffect(()=>{
-        if(tab==="foglio" && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
+        if((tab==="foglio"||tab==="clienti") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
       }, [tab]);
 
       const saveCell = async(cliente, periodo, patch)=>{
@@ -1619,7 +1619,63 @@ In italiano, con numeri ed euro.`,
           {/* ══ CLIENTI (anagrafica da cartelle) ══ */}
           {tab==="clienti" && (
             <div>
-              {folderClients.length>0 ? (()=>{
+              {foglio.clienti.length>0 ? (()=>{
+                // Vista clienti dai dati reali Supabase: Dovuto + Scaduto per cliente
+                const _now=new Date();
+                const DEADM={I:3,II:6,III:9,IV:12,GEN:1,FEB:2,MAR:3,APR:4,MAG:5,GIU:6,LUG:7,AGO:8,SET:9,OTT:10,NOV:11,DIC:12,I_SEM:6,II_SEM:12,ANNO:12,BILANCIO:6};
+                const elapsed=per=>{ const m=DEADM[per]; if(!m) return false; return _now > new Date(2026,m,0,23,59,59); };
+                const rows=foglio.clienti.map(c=>{
+                  const pfs=foglio.proforme.filter(p=>p.cliente_id===c.id);
+                  const arr=Number(c.arretrati)||0;
+                  const unpaid=pfs.filter(p=>!p.pagato);
+                  const dovuto=arr+unpaid.reduce((s,p)=>s+(Number(p.importo)||0),0);
+                  const scaduto=arr+unpaid.filter(p=>elapsed(p.periodo)).reduce((s,p)=>s+(Number(p.importo)||0),0);
+                  return {c,pfs,dovuto,scaduto,arr};
+                }).filter(r=>r.dovuto>0).sort((a,b)=>b.dovuto-a.dovuto);
+                const q=cliFilter.trim().toLowerCase();
+                const list=q?rows.filter(r=>r.c.nome.toLowerCase().includes(q)):rows;
+                const totDov=rows.reduce((s,r)=>s+r.dovuto,0), totScad=rows.reduce((s,r)=>s+r.scaduto,0);
+                return (<>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
+                    <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>CLIENTI DA INCASSARE</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{rows.length}</p></div>
+                    <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>DOVUTO TOTALE</p><p style={{margin:0,fontSize:18,fontWeight:700,color:S.warn}}>{fmt(totDov)}</p></div>
+                    <div style={{background:"var(--color-surface)",border:`1px solid ${S.warnD}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warnD,fontWeight:600}}>SCADUTO</p><p style={{margin:0,fontSize:18,fontWeight:700,color:S.warnD}}>{fmt(totScad)}</p></div>
+                  </div>
+                  <div style={{position:"relative",marginBottom:10}}>
+                    <i className="ti ti-search" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--color-text-secondary)"}}/>
+                    <input value={cliFilter} onChange={e=>setCliFilter(e.target.value)} placeholder="Cerca cliente..." style={{width:"100%",padding:"9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {list.map(r=>{ const open=selected?.__cli===r.c.id; return (
+                      <div key={r.c.id} style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:11,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
+                        <div onClick={()=>setSelected(open?null:{__cli:r.c.id})} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",cursor:"pointer"}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{margin:"0 0 2px",fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.c.nome} <span style={{fontSize:9,color:"var(--color-text-secondary)"}}>· {r.c.categoria}</span></p>
+                            <p style={{margin:0,fontSize:11,color:"var(--color-text-secondary)"}}>{r.pfs.filter(p=>!p.pagato&&Number(p.importo)>0).length} aperte · {r.pfs.filter(p=>p.pagato).length} pagate{r.arr>0?` · arretrati ${fmt(r.arr)}`:""}</p>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <p style={{margin:0,fontSize:14,fontWeight:700,color:S.warn}}>{fmt(r.dovuto)}</p>
+                            {r.scaduto>0 && <p style={{margin:0,fontSize:10,color:S.warnD}}>scaduto {fmt(r.scaduto)}</p>}
+                          </div>
+                          <i className={`ti ti-chevron-${open?"down":"right"}`} style={{fontSize:14,color:"var(--color-text-secondary)"}}/>
+                        </div>
+                        {open && (
+                          <div style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"8px 13px"}}>
+                            {r.arr>0 && <div style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0"}}><span style={{color:S.warnD}}>Arretrati 31/12/2025</span><b>{fmt(r.arr)}</b></div>}
+                            {r.pfs.sort((a,b)=>(DEADM[a.periodo]||13)-(DEADM[b.periodo]||13)).map(p=>(
+                              <div key={p.id} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                                <span>{PLABEL[p.periodo]||p.periodo} {p.pagato?<span style={{color:S.good}}>· PAGATO</span>:elapsed(p.periodo)?<span style={{color:S.warnD}}>· scaduto</span>:<span style={{color:"var(--color-text-secondary)"}}>· a scadere</span>}</span>
+                                <b style={{color:p.pagato?S.good:"inherit"}}>{fmt(p.importo)}</b>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );})}
+                    {list.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:18}}>Nessun cliente con dovuto{q?` per "${cliFilter}"`:""}.</p>}
+                  </div>
+                </>);
+              })() : folderClients.length>0 ? (()=>{
                 const q = cliFilter.trim().toLowerCase();
                 const list = q ? folderClients.filter(c=>c.name.toLowerCase().includes(q)) : folderClients;
                 const totApe = folderClients.reduce((s,c)=>s+c.open,0);
