@@ -1,0 +1,22 @@
+name: Supabase keep-alive
+
+# Tiene attivo il progetto Supabase (free tier va in pausa dopo 7 giorni di inattività).
+# Esegue una piccola query ogni giorno + possibilità di lancio manuale.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # ogni giorno alle 06:17 UTC
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Supabase (keep-alive)
+        run: |
+          code=$(curl -s -m 30 -o /dev/null -w "%{http_code}" \
+            "https://zncwwxuthnghguhmmkky.supabase.co/rest/v1/clienti?select=id&limit=1" \
+            -H "apikey: sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX" \
+            -H "Authorization: Bearer sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX")
+          echo "Supabase keep-alive HTTP status: $code"
+          if [ "$code" != "200" ]; then echo "Attenzione: risposta non 200"; exit 1; fi
