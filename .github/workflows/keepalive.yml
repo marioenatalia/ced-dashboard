@@ -1,7 +1,7 @@
 name: Supabase keep-alive
 
 # Tiene attivo il progetto Supabase (free tier va in pausa dopo 7 giorni di inattività).
-# Esegue una piccola query ogni giorno + possibilità di lancio manuale.
+# Esegue una piccola query ogni giorno. Tollerante agli errori temporanei (non manda email di fallimento).
 
 on:
   schedule:
@@ -12,11 +12,18 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Query Supabase (keep-alive)
+      - name: Query Supabase (keep-alive, con retry)
         run: |
-          code=$(curl -s -m 30 -o /dev/null -w "%{http_code}" \
-            "https://zncwwxuthnghguhmmkky.supabase.co/rest/v1/clienti?select=id&limit=1" \
-            -H "apikey: sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX" \
-            -H "Authorization: Bearer sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX")
-          echo "Supabase keep-alive HTTP status: $code"
-          if [ "$code" != "200" ]; then echo "Attenzione: risposta non 200"; exit 1; fi
+          ok=0
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -m 30 -o /dev/null -w "%{http_code}" \
+              "https://zncwwxuthnghguhmmkky.supabase.co/rest/v1/clienti?select=id&limit=1" \
+              -H "apikey: sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX" \
+              -H "Authorization: Bearer sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX" || echo "000")
+            echo "Tentativo $i -> HTTP $code"
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            sleep 10
+          done
+          if [ "$ok" = "1" ]; then echo "Keep-alive OK"; else echo "Keep-alive non riuscito oggi (riprova domani) - nessun errore bloccante"; fi
+          # esce sempre con successo: un fallimento temporaneo non deve mandare email
+          exit 0
