@@ -937,6 +937,42 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           LS.set("ced_reco_rows", next); return next;
         });
       };
+
+      // Mappa il periodo letto dalla proforma a (codice periodo, categoria suggerita)
+      const MESI3=["GEN","FEB","MAR","APR","MAG","GIU","LUG","AGO","SET","OTT","NOV","DIC"];
+      const recoPeriodMap = (row)=>{
+        const p=(row.periodo||"").toLowerCase();
+        if(p.includes("bilanc")) return ["BILANCIO","bilancio"];
+        if(p.includes("mensil")||p.includes("mese")){ let m=5; if(row.data){ const d=new Date(row.data); if(!isNaN(d)) m=d.getMonth(); } return [MESI3[m]||"GEN","altri"]; }
+        if(p.includes("semestr")){ return ["I_SEM","ragazzi"]; }
+        if(p.includes("annual")||p.includes("anno")) return ["ANNO","ragazzi"];
+        if(p.includes("iv")) return ["IV","focus"];
+        if(p.includes("iii")) return ["III","focus"];
+        if(p.includes("ii")) return ["II","focus"];
+        if(p.includes("i")) return ["I","focus"];
+        return ["I","focus"];
+      };
+      // Aggiunge una proforma letta dalla Riconcilia direttamente nel Foglio (Supabase)
+      const addRecoToFoglio = async(row)=>{
+        if(!sbReady()){ setYdError("Connetti prima Supabase (tab Foglio)"); return; }
+        try{
+          const [per,catSug]=recoPeriodMap(row);
+          let cli=foglio.clienti.find(c=>{ const a=normName(c.nome),b=normName(row.cliente); return a&&b&&(a===b||a.startsWith(b.slice(0,6))||b.startsWith(a.slice(0,6))); });
+          if(!cli){ const ins=await sbInsert("clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; setFoglio(f=>({...f,clienti:[...f.clienti,cli]})); }
+          const ex=foglio.proforme.find(p=>p.cliente_id===cli.id && p.periodo===per && p.anno===2026);
+          const patch={importo:row.totale||0,pagato:!!row.paid,pdf_path:row.file||null,data_emissione:row.data||null};
+          if(ex){ await sbUpdate("proforme",`id=eq.${ex.id}`,patch); setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===ex.id?{...p,...patch}:p)})); }
+          else { const ins=await sbInsert("proforme",[{cliente_id:cli.id,anno:2026,periodo:per,...patch}]); setFoglio(f=>({...f,proforme:[...f.proforme,ins[0]]})); }
+          setRecoRows(prev=>{ const next=prev.map(r=>r===row?{...r,state:"added"}:r); LS.set("ced_reco_rows",next); return next; });
+        }catch(e){ setYdError("Errore aggiunta al Foglio: "+e.message); }
+      };
+      const addAllRecoToFoglio = async()=>{
+        if(!sbReady()){ setYdError("Connetti prima Supabase (tab Foglio)"); return; }
+        const da=recoRows.filter(r=>!r.inExcel && !r.state && (r.totale||0)>0);
+        if(da.length===0){ setYdError("Nessuna nuova proforma da aggiungere"); return; }
+        if(!confirm(`Aggiungere ${da.length} proforma al Foglio?`)) return;
+        for(const r of da){ await addRecoToFoglio(r); }
+      };
       const runReconciliation = useCallback(async()=>{
         if (!ydToken) { setYdError("Token Yandex mancante"); return; }
         if (!LS.raw("ced_api_key")) { setYdError("API key Anthropic non configurata"); return; }
@@ -1013,7 +1049,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
       useEffect(()=>{
-        if((tab==="foglio"||tab==="clienti") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
+        if((tab==="foglio"||tab==="clienti"||tab==="riconcilia") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
       }, [tab]);
 
       const saveCell = async(cliente, periodo, patch)=>{
@@ -1930,26 +1966,28 @@ In italiano, con numeri ed euro.`,
                     <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>FUORI EXCEL</p><p style={{margin:0,fontSize:19,fontWeight:700,color:S.warn}}>{miss.length}</p></div>
                     <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>IMPORTO FUORI EXCEL</p><p style={{margin:0,fontSize:17,fontWeight:700,color:S.warn}}>{fmt(missTot)}</p></div>
                   </div>
-                  <div style={{display:"flex",gap:6,marginBottom:10}}>
+                  <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
                     {[["mancanti",`Solo fuori Excel (${miss.length})`],["tutti",`Tutte (${recoRows.length})`]].map(([k,l])=>(
                       <button key={k} onClick={()=>setRecoFilter(k)} style={{padding:"5px 12px",borderRadius:20,border:recoFilter===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:recoFilter===k?S.slateD+"15":"transparent",color:recoFilter===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:recoFilter===k?600:400}}>{l}</button>
                     ))}
+                    {miss.length>0 && <button onClick={addAllRecoToFoglio} title="Aggiungi tutte le nuove al Foglio" style={{marginLeft:"auto",padding:"5px 12px",borderRadius:8,border:"none",background:S.slateD,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-database-plus"/>Aggiungi tutte al Foglio</button>}
                   </div>
                   <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
                     {view.map((r,i)=>{
-                      const dimmed = r.state==="excluded"||r.state==="paid";
-                      const dot = r.state==="paid"?S.good : r.state==="excluded"?C.gray : (r.inExcel?S.good:S.warn);
+                      const dimmed = r.state==="excluded"||r.state==="paid"||r.state==="added";
+                      const dot = r.state==="paid"?S.good : r.state==="added"?S.slateD : r.state==="excluded"?C.gray : (r.inExcel?S.good:S.warn);
                       return (
                       <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",opacity:dimmed?.55:1}}>
                         <div style={{width:8,height:8,borderRadius:"50%",background:dot,flexShrink:0}}/>
                         <div style={{flex:1,minWidth:0}}>
                           <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:dimmed?"line-through":"none"}}>{r.cliente}</p>
-                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}{r.state==="paid"?" · ✓ segnata pagata":r.state==="excluded"?" · esclusa":""}</p>
+                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}{r.state==="paid"?" · ✓ segnata pagata":r.state==="excluded"?" · esclusa":r.state==="added"?" · ✓ aggiunta al Foglio":""}</p>
                         </div>
                         <span style={{fontSize:13,fontWeight:600,color:r.inExcel?"var(--color-text-primary)":S.warn,marginRight:4}}>{fmt(r.totale)}</span>
                         {r.state ? (
                           <button onClick={()=>setRecoRowState(r, r.state)} title="Annulla" style={{padding:"4px 8px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:6,fontSize:10,cursor:"pointer",color:"var(--color-text-secondary)"}}>Annulla</button>
                         ) : (<>
+                          <button onClick={()=>addRecoToFoglio(r)} title="Aggiungi al Foglio (Supabase)" style={{padding:"4px 8px",background:S.slateD,border:"none",borderRadius:6,fontSize:10,cursor:"pointer",color:"#fff",fontWeight:600,display:"flex",alignItems:"center",gap:3}}><i className="ti ti-plus"/>Foglio</button>
                           <button onClick={()=>setRecoRowState(r,"paid")} title="Segna pagata" style={{padding:"4px 7px",background:S.good+"18",border:`1px solid ${S.good}44`,borderRadius:6,fontSize:11,cursor:"pointer",color:S.good,display:"flex",alignItems:"center",gap:3}}><i className="ti ti-check"/></button>
                           <button onClick={()=>setRecoRowState(r,"excluded")} title="Escludi dal conteggio" style={{padding:"4px 7px",background:"transparent",border:"1px solid var(--color-border-tertiary)",borderRadius:6,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-eye-off"/></button>
                         </>)}
