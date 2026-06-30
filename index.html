@@ -1477,13 +1477,17 @@ In italiano, con numeri ed euro.`,
           {tab==="dashboard" && (
             <div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(165px,1fr))",gap:12,marginBottom:14}}>
-                {[
+                {(usaFoglio ? [
+                  {label:"Da incassare",value:fmt(residuo),icon:"ti-receipt",        c:"#3E5C76"},
+                  {label:"Scaduto",     value:fmt(scadutiV),icon:"ti-alert-triangle", c:"#8C6A6A"},
+                  {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",        c:"#4A5568"},
+                ] : [
                   {label:"Fatturato",value:fmt(totale),  icon:"ti-receipt",        c:"#3E5C76"},
                   {label:"Incassato",value:fmt(incassato),icon:"ti-circle-check",  c:"#4A7A8C"},
                   {label:"Residuo",  value:fmt(residuo),  icon:"ti-clock",         c:"#6E7E92"},
                   {label:"Scaduto",  value:fmt(scadutiV), icon:"ti-alert-triangle",c:"#8C6A6A"},
                   {label:"Storico >24m",value:fmt(storicoV),icon:"ti-archive",     c:"#4A5568"},
-                ].map(k=>(
+                ]).map(k=>(
                   <div key={k.label} style={{position:"relative",background:"var(--color-surface)",borderRadius:14,padding:"15px 16px",border:"1px solid var(--color-border-tertiary)",boxShadow:"var(--shadow-card)",borderTop:`3px solid ${k.c}`}}>
                     <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11}}>
                       <div style={{width:32,height:32,borderRadius:9,background:k.c+"1A",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -1496,6 +1500,7 @@ In italiano, con numeri ed euro.`,
                 ))}
               </div>
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:16,padding:"16px 18px",marginBottom:12,boxShadow:"0 2px 10px -4px rgba(0,0,0,.12)"}}>
+                {!usaFoglio && <>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:7}}>
                   <span style={{fontSize:12,color:"var(--color-text-secondary)",fontWeight:500}}>Tasso di incasso</span>
                   <span style={{fontSize:22,fontWeight:700,color:S.good,letterSpacing:-.5}}>{totale>0?Math.round((incassato/totale)*100):0}%</span>
@@ -1503,7 +1508,8 @@ In italiano, con numeri ed euro.`,
                 <div style={{background:"var(--color-background-secondary)",borderRadius:8,height:11,overflow:"hidden"}}>
                   <div style={{height:"100%",width:`${totale>0?(incassato/totale)*100:0}%`,background:"linear-gradient(90deg,#3E5C76,#4A7A8C)",borderRadius:8,transition:"width .6s"}}/>
                 </div>
-                <div style={{display:"flex",gap:10,marginTop:12,flexWrap:"wrap"}}>
+                </>}
+                <div style={{display:"flex",gap:10,marginTop:usaFoglio?0:12,flexWrap:"wrap"}}>
                   {Object.entries(STATUS).map(([k,v])=>(
                     <div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,padding:"4px 10px",borderRadius:20}}>
                       <div style={{width:7,height:7,borderRadius:"50%",background:v.c}}/><span style={{fontSize:11,color:v.c,fontWeight:600}}>{v.label}: {srcInv.filter(i=>i.status===k).length}</span>
