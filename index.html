@@ -931,11 +931,16 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       };
       const recoRef = useRef({ stop:false });
       // Cambia stato di una riga riconciliazione: "excluded" | "paid" | undefined (toggle)
+      // Stati riga persistenti per file (sopravvivono a una nuova riconciliazione completa)
+      const recoKey = r => r.path || ((r.folder||"")+"/"+(r.file||""));
+      const saveRecoState = (row, st) => { const m=LS.get("ced_reco_states",{}); const k=recoKey(row); if(st) m[k]=st; else delete m[k]; LS.set("ced_reco_states",m); };
       const setRecoRowState = (row, st) => {
+        const newSt = row.state===st ? undefined : st;
         setRecoRows(prev => {
-          const next = prev.map(r => r===row ? {...r, state: r.state===st?undefined:st} : r);
+          const next = prev.map(r => r===row ? {...r, state:newSt} : r);
           LS.set("ced_reco_rows", next); return next;
         });
+        saveRecoState(row, newSt);
       };
 
       // Mappa il periodo letto dalla proforma a (codice periodo, categoria suggerita)
@@ -964,6 +969,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           if(ex){ await sbUpdate("proforme",`id=eq.${ex.id}`,patch); setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===ex.id?{...p,...patch}:p)})); }
           else { const ins=await sbInsert("proforme",[{cliente_id:cli.id,anno:2026,periodo:per,...patch}]); setFoglio(f=>({...f,proforme:[...f.proforme,ins[0]]})); }
           setRecoRows(prev=>{ const next=prev.map(r=>r===row?{...r,state:"added"}:r); LS.set("ced_reco_rows",next); return next; });
+          saveRecoState(row,"added");
         }catch(e){ setYdError("Errore aggiunta al Foglio: "+e.message); }
       };
       const addAllRecoToFoglio = async()=>{
@@ -1015,10 +1021,11 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
               {type:"text",text:`Parcella/proforma italiana studio CED. Dalla CAUSALE ricava il periodo di competenza. Rispondi SOLO JSON: {"cliente":"...","data_emissione":"YYYY-MM-DD","periodo":"I trimestre|II trimestre|III trimestre|IV trimestre|annuale|mensile|bilancio|altro","competenza":"causale","importo_imponibile":0.00,"importo_totale":0.00}`}
             ]}], null, MODEL_EXTRACT).then(raw=>{ try{return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim());}catch{return null;} });
             const wl=inWhitelist(it.folder);
-            const row={ file:it.name, folder:it.folder, paid:it.paid,
+            const savedStates=LS.get("ced_reco_states",{});
+            const row={ file:it.name, folder:it.folder, path:it.path, paid:it.paid,
               cliente:d?.cliente||it.folder, data:d?.data_emissione||"", periodo:d?.periodo||"?",
               competenza:d?.competenza||"", imponibile:d?.importo_imponibile||0, totale:d?.importo_totale||0,
-              inExcel: wl===true, parseFail:!d };
+              inExcel: wl===true, parseFail:!d, state: savedStates[it.path] };
             rows.push(row); done++;
             if(done%5===0||done===pdfs.length){ setRecoRows([...rows]); }
             setRecoProg({done,total:pdfs.length});
