@@ -390,6 +390,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [recoProg, setRecoProg]     = useState({done:0,total:0});
       const [recoRows, setRecoRows]     = useState(()=>LS.get("ced_reco_rows",[]));
       const [recoFilter, setRecoFilter] = useState("mancanti"); // mancanti|tutti
+      const [recoAddMsg, setRecoAddMsg] = useState("");
       // Foglio Pagamenti (Supabase)
       const [sbUrl, setSbUrl]           = useState(()=>localStorage.getItem("ced_sb_url")||"");
       const [sbKey, setSbKey]           = useState(()=>localStorage.getItem("ced_sb_key")||"");
@@ -975,26 +976,39 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         return ["I","focus"];
       };
       // Aggiunge una proforma letta dalla Riconcilia direttamente nel Foglio (Supabase)
+      // Inserisce/aggiorna una proforma nel Foglio usando una cache clienti locale (evita duplicati nei loop)
+      const _pushRecoRow = async(row, clientiCache, proformeCache)=>{
+        const [per,catSug]=recoPeriodMap(row);
+        let cli=clientiCache.find(c=>{ const a=normName(c.nome),b=normName(row.cliente); return a&&b&&(a===b||a.startsWith(b.slice(0,6))||b.startsWith(a.slice(0,6))); });
+        if(!cli){ const ins=await sbInsert("clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; clientiCache.push(cli); }
+        const patch={importo:row.totale||0,pagato:!!row.paid,pdf_path:row.file||null,data_emissione:row.data||null};
+        const ex=proformeCache.find(p=>p.cliente_id===cli.id && p.periodo===per && p.anno===2026);
+        if(ex){ await sbUpdate("proforme",`id=eq.${ex.id}`,patch); Object.assign(ex,patch); }
+        else { const ins=await sbInsert("proforme",[{cliente_id:cli.id,anno:2026,periodo:per,...patch}]); proformeCache.push(ins[0]); }
+      };
       const addRecoToFoglio = async(row)=>{
-        if(!sbReady()){ setYdError("Connetti prima Supabase (tab Foglio)"); return; }
+        if(!sbReady()){ setRecoAddMsg("⚠ Connetti prima Supabase (tab Foglio)"); return; }
+        setRecoAddMsg("Aggiunta in corso...");
         try{
-          const [per,catSug]=recoPeriodMap(row);
-          let cli=foglio.clienti.find(c=>{ const a=normName(c.nome),b=normName(row.cliente); return a&&b&&(a===b||a.startsWith(b.slice(0,6))||b.startsWith(a.slice(0,6))); });
-          if(!cli){ const ins=await sbInsert("clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; setFoglio(f=>({...f,clienti:[...f.clienti,cli]})); }
-          const ex=foglio.proforme.find(p=>p.cliente_id===cli.id && p.periodo===per && p.anno===2026);
-          const patch={importo:row.totale||0,pagato:!!row.paid,pdf_path:row.file||null,data_emissione:row.data||null};
-          if(ex){ await sbUpdate("proforme",`id=eq.${ex.id}`,patch); setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===ex.id?{...p,...patch}:p)})); }
-          else { const ins=await sbInsert("proforme",[{cliente_id:cli.id,anno:2026,periodo:per,...patch}]); setFoglio(f=>({...f,proforme:[...f.proforme,ins[0]]})); }
-          setRecoRows(prev=>{ const next=prev.map(r=>r===row?{...r,state:"added"}:r); LS.set("ced_reco_rows",next); return next; });
+          const cc=[...foglio.clienti], pc=[...foglio.proforme];
+          await _pushRecoRow(row, cc, pc);
           saveRecoState(row,"added");
-        }catch(e){ setYdError("Errore aggiunta al Foglio: "+e.message); }
+          setRecoRows(prev=>{ const next=prev.map(r=>r===row?{...r,state:"added"}:r); LS.set("ced_reco_rows",next); return next; });
+          await loadFoglio();
+          setRecoAddMsg(`✓ "${row.cliente}" aggiunta al Foglio.`);
+        }catch(e){ setRecoAddMsg("Errore aggiunta: "+e.message); }
       };
       const addAllRecoToFoglio = async()=>{
-        if(!sbReady()){ setYdError("Connetti prima Supabase (tab Foglio)"); return; }
+        if(!sbReady()){ setRecoAddMsg("⚠ Connetti prima Supabase (tab Foglio)"); return; }
         const da=recoRows.filter(r=>!r.inExcel && !r.state && (r.totale||0)>0);
-        if(da.length===0){ setYdError("Nessuna nuova proforma da aggiungere"); return; }
+        if(da.length===0){ setRecoAddMsg("Nessuna nuova proforma da aggiungere (sono già in Excel, già aggiunte, o senza importo letto)."); return; }
         if(!confirm(`Aggiungere ${da.length} proforma al Foglio?`)) return;
-        for(const r of da){ await addRecoToFoglio(r); }
+        setRecoAddMsg(`Aggiunta di ${da.length} proforma in corso...`);
+        const cc=[...foglio.clienti], pc=[...foglio.proforme]; let added=0, err=0;
+        for(const r of da){ try{ await _pushRecoRow(r, cc, pc); saveRecoState(r,"added"); added++; }catch(e){ err++; } }
+        setRecoRows(prev=>{ const next=prev.map(r=> da.includes(r)?{...r,state:"added"}:r); LS.set("ced_reco_rows",next); return next; });
+        await loadFoglio();
+        setRecoAddMsg(`✓ Aggiunte ${added} proforma al Foglio${err?` · ${err} errori`:""}. Controlla Dashboard/Clienti.`);
       };
       const runReconciliation = useCallback(async()=>{
         if (!ydToken) { setYdError("Token Yandex mancante"); return; }
@@ -2002,6 +2016,7 @@ In italiano, con numeri ed euro.`,
                     ))}
                     {miss.length>0 && <button onClick={addAllRecoToFoglio} title="Aggiungi tutte le nuove al Foglio" style={{marginLeft:"auto",padding:"5px 12px",borderRadius:8,border:"none",background:S.slateD,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-database-plus"/>Aggiungi tutte al Foglio</button>}
                   </div>
+                  {recoAddMsg && <p style={{margin:"0 0 10px",fontSize:12,fontWeight:500,color:recoAddMsg.startsWith("Errore")||recoAddMsg.startsWith("⚠")?C.red:recoAddMsg.startsWith("✓")?S.good:S.slateD,background:"var(--color-background-secondary)",padding:"8px 12px",borderRadius:8}}>{recoAddMsg}</p>}
                   <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
                     {view.map((r,i)=>{
                       const dimmed = r.state==="excluded"||r.state==="paid"||r.state==="added";
