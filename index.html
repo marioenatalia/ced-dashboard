@@ -399,22 +399,39 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [foglioSeed, setFoglioSeed] = useState("idle");
       const [foglioMsg, setFoglioMsg]   = useState("");
 
-      const totale    = invoices.reduce((s,i)=>s+i.amount,0);
-      const incassato = invoices.reduce((s,i)=>s+i.paid,0);
-      const residuo   = totale-incassato;
-      // ── Classificazione temporale crediti (stato derivato dalla data) ──
       const _today = new Date(); _today.setHours(0,0,0,0);
       const daysOverdue = overdueDays;
       const isOpen = inv => inv.status!=="pagato" && (inv.amount-inv.paid)>0;
       const isStorico = inv => { const d=daysOverdue(inv); return isOpen(inv) && d!=null && d>730; }; // >24 mesi
+
+      // ── FONTE DATI DASHBOARD: deriva dal Foglio (Supabase) se caricato, altrimenti invoices locali ──
+      const PERIOD_DEADLINE = { I:"2026-03-31",II:"2026-06-30",III:"2026-09-30",IV:"2026-12-31",GEN:"2026-01-31",FEB:"2026-02-28",MAR:"2026-03-31",APR:"2026-04-30",MAG:"2026-05-31",GIU:"2026-06-30",LUG:"2026-07-31",AGO:"2026-08-31",SET:"2026-09-30",OTT:"2026-10-31",NOV:"2026-11-30",DIC:"2026-12-31",I_SEM:"2026-06-30",II_SEM:"2026-12-31",ANNO:"2026-12-31",BILANCIO:"2026-06-30" };
+      const foglioInvoices = (()=>{
+        const out=[];
+        foglio.clienti.forEach(c=>{
+          const arr=Number(c.arretrati)||0;
+          if(arr>0) out.push({id:c.id+"-ARR",client:c.nome,amount:arr,paid:0,date:"",due:"2025-12-31",status:effStatus({amount:arr,paid:0,due:"2025-12-31"}),notes:[],payments:[],pdfPath:null});
+          foglio.proforme.filter(p=>p.cliente_id===c.id && !p.pagato && (Number(p.importo)||0)>0).forEach(p=>{
+            const imp=Number(p.importo)||0; const due=PERIOD_DEADLINE[p.periodo]||"";
+            out.push({id:p.id,client:c.nome,amount:imp,paid:0,date:p.data_emissione||"",due,status:effStatus({amount:imp,paid:0,due}),notes:[],payments:[],pdfPath:p.pdf_path||null});
+          });
+        });
+        return out;
+      })();
+      const usaFoglio = foglio.clienti.length>0;
+      const srcInv = usaFoglio ? foglioInvoices : invoices;
+
+      const totale    = srcInv.reduce((s,i)=>s+i.amount,0);
+      const incassato = srcInv.reduce((s,i)=>s+i.paid,0);
+      const residuo   = totale-incassato;
       // Scaduto = aperto e in ritardo, MA non ancora storico (1..730 gg). Storico gestito a parte.
-      const scadutiV  = invoices.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; }).reduce((s,i)=>s+(i.amount-i.paid),0);
-      const storicoV  = invoices.filter(isStorico).reduce((s,i)=>s+(i.amount-i.paid),0);
-      const storicoN  = invoices.filter(isStorico).length;
+      const scadutiV  = srcInv.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; }).reduce((s,i)=>s+(i.amount-i.paid),0);
+      const storicoV  = srcInv.filter(isStorico).reduce((s,i)=>s+(i.amount-i.paid),0);
+      const storicoN  = srcInv.filter(isStorico).length;
 
       // ── Analytics condivise (no AI) ──
       const ANA = (()=>{
-        const openInv = invoices.filter(isOpen);
+        const openInv = srcInv.filter(isOpen);
         const mLabels = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
         // Cash flow: incassi previsti prossimi 6 mesi (per mese di scadenza) + barra "Scaduto"
         let scadOra = 0;
@@ -432,7 +449,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         for (let k=5;k>=0;k--){
           const dt=new Date(_today.getFullYear(),_today.getMonth()-k,1);
           const me=new Date(_today.getFullYear(),_today.getMonth()-k+1,1);
-          let v=0; invoices.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
+          let v=0; srcInv.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
           inc.push({label:mLabels[dt.getMonth()],value:v,color:S.good});
         }
         // Aging crediti aperti — scala blu-grigio che scurisce con l'anzianità (peggiore = clay)
@@ -446,10 +463,10 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         return { cashflow, incassiMensili:inc, aging, topSoff, dso, openCount:openInv.length, incassato6m:inc.reduce((s,x)=>s+x.value,0) };
       })();
 
-      const _byStatus = filterS==="tutti" ? invoices
-                       : filterS==="storico" ? invoices.filter(isStorico)
-                       : filterS==="scaduto" ? invoices.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; })
-                       : invoices.filter(i=>i.status===filterS);
+      const _byStatus = filterS==="tutti" ? srcInv
+                       : filterS==="storico" ? srcInv.filter(isStorico)
+                       : filterS==="scaduto" ? srcInv.filter(i=>{ const d=daysOverdue(i); return isOpen(i)&&d!=null&&d>0&&d<=730; })
+                       : srcInv.filter(i=>i.status===filterS);
       const _q = search.trim().toLowerCase();
       const filtered  = _q ? _byStatus.filter(i=>(i.client||"").toLowerCase().includes(_q) || (i.id||"").toLowerCase().includes(_q)) : _byStatus;
 
@@ -1056,7 +1073,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
       useEffect(()=>{
-        if((tab==="foglio"||tab==="clienti"||tab==="riconcilia") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
+        if((tab==="dashboard"||tab==="fatture"||tab==="foglio"||tab==="clienti"||tab==="riconcilia") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
       }, [tab]);
 
       const saveCell = async(cliente, periodo, patch)=>{
@@ -1489,7 +1506,7 @@ In italiano, con numeri ed euro.`,
                 <div style={{display:"flex",gap:10,marginTop:12,flexWrap:"wrap"}}>
                   {Object.entries(STATUS).map(([k,v])=>(
                     <div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,padding:"4px 10px",borderRadius:20}}>
-                      <div style={{width:7,height:7,borderRadius:"50%",background:v.c}}/><span style={{fontSize:11,color:v.c,fontWeight:600}}>{v.label}: {invoices.filter(i=>i.status===k).length}</span>
+                      <div style={{width:7,height:7,borderRadius:"50%",background:v.c}}/><span style={{fontSize:11,color:v.c,fontWeight:600}}>{v.label}: {srcInv.filter(i=>i.status===k).length}</span>
                     </div>
                   ))}
                 </div>
@@ -1533,7 +1550,7 @@ In italiano, con numeri ed euro.`,
 
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px"}}>
                 <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Scadenze critiche</h3>
-                {invoices.filter(i=>i.status!=="pagato").sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).slice(0,5).map(inv=>(
+                {srcInv.filter(i=>i.status!=="pagato").sort((a,b)=>new Date(a.due||0)-new Date(b.due||0)).slice(0,5).map(inv=>(
                   <div key={inv.id} onClick={()=>{setSelected(inv);setTab("fatture");}} style={{display:"flex",alignItems:"center",padding:"8px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",gap:10}}>
                     <div style={{width:32,height:32,borderRadius:8,background:STATUS[inv.status].bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
                       <i className={`ti ${STATUS[inv.status].icon}`} style={{fontSize:14,color:STATUS[inv.status].c}}/>
@@ -2232,7 +2249,7 @@ In italiano, con numeri ed euro.`,
           {tab==="ai" && (
             <div>
               {(()=>{
-                const openInv = invoices.filter(isOpen);
+                const openInv = srcInv.filter(isOpen);
                 // ─ Cash flow: incassi previsti prossimi 6 mesi (per mese di scadenza) ─
                 const mLabels = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
                 const cf = [];
@@ -2279,8 +2296,8 @@ In italiano, con numeri ed euro.`,
                 const dso = wSum>0?Math.round(wDays/wSum):0;
                 // distribuzione per stato (valore residuo)
                 const distRows = [
-                  {label:"In attesa",value:invoices.filter(i=>i.status==="attesa").reduce((s,i)=>s+(i.amount-i.paid),0),color:S.slate},
-                  {label:"Parziale", value:invoices.filter(i=>i.status==="parziale").reduce((s,i)=>s+(i.amount-i.paid),0),color:S.mute},
+                  {label:"In attesa",value:srcInv.filter(i=>i.status==="attesa").reduce((s,i)=>s+(i.amount-i.paid),0),color:S.slate},
+                  {label:"Parziale", value:srcInv.filter(i=>i.status==="parziale").reduce((s,i)=>s+(i.amount-i.paid),0),color:S.mute},
                   {label:"Scaduto",  value:scadutiV,color:S.warn},
                   {label:"Storico >24m",value:storicoV,color:S.warnD},
                 ].map(r=>({...r,display:fmt(r.value)}));
