@@ -980,11 +980,11 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const _pushRecoRow = async(row, clientiCache, proformeCache)=>{
         const [per,catSug]=recoPeriodMap(row);
         let cli=clientiCache.find(c=>{ const a=normName(c.nome),b=normName(row.cliente); return a&&b&&(a===b||a.startsWith(b.slice(0,6))||b.startsWith(a.slice(0,6))); });
-        if(!cli){ const ins=await sbInsert("clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; clientiCache.push(cli); }
+        if(!cli){ const ins=await sbInsert("ced_clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; clientiCache.push(cli); }
         const patch={importo:row.totale||0,pagato:!!row.paid,pdf_path:row.file||null,data_emissione:row.data||null};
         const ex=proformeCache.find(p=>p.cliente_id===cli.id && p.periodo===per && p.anno===2026);
-        if(ex){ await sbUpdate("proforme",`id=eq.${ex.id}`,patch); Object.assign(ex,patch); }
-        else { const ins=await sbInsert("proforme",[{cliente_id:cli.id,anno:2026,periodo:per,...patch}]); proformeCache.push(ins[0]); }
+        if(ex){ await sbUpdate("ced_proforme",`id=eq.${ex.id}`,patch); Object.assign(ex,patch); }
+        else { const ins=await sbInsert("ced_proforme",[{cliente_id:cli.id,anno:2026,periodo:per,...patch}]); proformeCache.push(ins[0]); }
       };
       const addRecoToFoglio = async(row)=>{
         if(!sbReady()){ setRecoAddMsg("⚠ Connetti prima Supabase (tab Foglio)"); return; }
@@ -1077,8 +1077,8 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         if(!sbReady()){ setFoglioMsg("Configura prima URL e chiave Supabase."); return; }
         setFoglioLoad(true); setFoglioMsg("");
         try{
-          const clienti = await sbGet("clienti","select=*&order=categoria,nome");
-          const proforme = await sbGet("proforme","select=*&limit=20000");
+          const clienti = await sbGet("ced_clienti","select=*&order=categoria,nome");
+          const proforme = await sbGet("ced_proforme","select=*&limit=20000");
           setFoglio({clienti,proforme});
           setFoglioMsg(`Caricati ${clienti.length} clienti e ${proforme.length} proforme dal cloud.`);
         }catch(e){ setFoglioMsg("Errore caricamento: "+e.message); }
@@ -1095,27 +1095,27 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         const ex = foglio.proforme.find(p=>p.cliente_id===cliente.id && p.anno===2026 && p.periodo===periodo);
         try{
           if(ex){
-            const upd = await sbUpdate("proforme",`id=eq.${ex.id}`,patch);
+            const upd = await sbUpdate("ced_proforme",`id=eq.${ex.id}`,patch);
             setFoglio(f=>({...f, proforme:f.proforme.map(p=>p.id===ex.id?{...p,...patch}:p)}));
           } else {
-            const ins = await sbInsert("proforme",[{cliente_id:cliente.id,anno:2026,periodo,...patch}]);
+            const ins = await sbInsert("ced_proforme",[{cliente_id:cliente.id,anno:2026,periodo,...patch}]);
             setFoglio(f=>({...f, proforme:[...f.proforme, ins[0]]}));
           }
         }catch(e){ setFoglioMsg("Errore salvataggio: "+e.message); }
       };
       const saveArretrati = async(cliente, val)=>{
-        try{ await sbUpdate("clienti",`id=eq.${cliente.id}`,{arretrati:val});
+        try{ await sbUpdate("ced_clienti",`id=eq.${cliente.id}`,{arretrati:val});
           setFoglio(f=>({...f, clienti:f.clienti.map(c=>c.id===cliente.id?{...c,arretrati:val}:c)})); }
         catch(e){ setFoglioMsg("Errore: "+e.message); }
       };
       const addCliente = async()=>{
         const nome = prompt("Nome nuovo cliente:"); if(!nome) return;
-        try{ const ins=await sbInsert("clienti",[{nome,categoria:foglioCat}]); setFoglio(f=>({...f,clienti:[...f.clienti,ins[0]]})); }
+        try{ const ins=await sbInsert("ced_clienti",[{nome,categoria:foglioCat}]); setFoglio(f=>({...f,clienti:[...f.clienti,ins[0]]})); }
         catch(e){ setFoglioMsg("Errore: "+e.message); }
       };
       const delCliente = async(c)=>{
         if(!confirm(`Eliminare ${c.nome} e tutte le sue proforma?`)) return;
-        try{ await sbDelete("clienti",`id=eq.${c.id}`); setFoglio(f=>({clienti:f.clienti.filter(x=>x.id!==c.id),proforme:f.proforme.filter(p=>p.cliente_id!==c.id)})); }
+        try{ await sbDelete("ced_clienti",`id=eq.${c.id}`); setFoglio(f=>({clienti:f.clienti.filter(x=>x.id!==c.id),proforme:f.proforme.filter(p=>p.cliente_id!==c.id)})); }
         catch(e){ setFoglioMsg("Errore: "+e.message); }
       };
 
@@ -1129,19 +1129,19 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:"array"});
           const grid=n=>{ const ws=wb.Sheets[n]; return ws?XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""}):[]; };
           // svuota
-          await sbDelete("proforme","id=not.is.null");
-          await sbDelete("clienti","id=not.is.null");
+          await sbDelete("ced_proforme","id=not.is.null");
+          await sbDelete("ced_clienti","id=not.is.null");
           // bilancio non pagati -> 600
           const bilset=new Set();
           (grid("BILANCIO")||[]).slice(1).forEach(r=>{ const nm=String(r[0]||"").trim(); if(nm.length<2) return; const flags=r.slice(1).join(" ").toUpperCase(); if(!flags.includes("PAGAT")) bilset.add(normName(nm)); });
           const hasBil=nm=>{ const n=normName(nm); return [...bilset].some(b=>b===n||b.startsWith(n.slice(0,6))||n.startsWith(b.slice(0,6))); };
           let nC=0,nP=0;
           const pushClient = async(nome,categoria,arretrati,tariffa,inact,periods)=>{
-            const ins=await sbInsert("clienti",[{nome,categoria,arretrati:arretrati||0,tariffa:tariffa||"",stato:inact?"uscito":"attivo"}]);
+            const ins=await sbInsert("ced_clienti",[{nome,categoria,arretrati:arretrati||0,tariffa:tariffa||"",stato:inact?"uscito":"attivo"}]);
             const cid=ins[0].id; nC++;
             const rows=[];
             for(const [periodo,importo,pagato] of periods){ if(importo>0||pagato) rows.push({cliente_id:cid,anno:2026,periodo,importo:importo||0,pagato:!!pagato}); }
-            if(rows.length){ await sbInsert("proforme",rows); nP+=rows.length; }
+            if(rows.length){ await sbInsert("ced_proforme",rows); nP+=rows.length; }
           };
           // FOCUS
           for(const r of (grid("FOCUS")||[]).slice(1)){
