@@ -1,0 +1,21 @@
+name: ced-proxy keep-alive
+
+# Tiene sveglio il servizio Render free ced-proxy (va in sleep dopo 15 min di inattività).
+# Fa un ping a /health ogni 10 minuti SOLO in orario lavorativo (per restare nei limiti free Render).
+# Italia 08:00-21:00 ≈ 06:00-19:00 UTC, lun-ven.
+
+on:
+  schedule:
+    - cron: '*/10 6-19 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping ced-proxy /health
+        run: |
+          code=$(curl -s -m 30 -o /dev/null -w "%{http_code}" "https://ced-proxy.onrender.com/health" || echo "000")
+          echo "ced-proxy /health -> HTTP $code"
+          # non blocca mai: un fallimento temporaneo non deve mandare email
+          exit 0
