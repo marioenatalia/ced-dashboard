@@ -394,7 +394,14 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       // Foglio Pagamenti (Supabase)
       const [sbUrl, setSbUrl]           = useState(()=>localStorage.getItem("ced_sb_url")||"");
       const [sbKey, setSbKey]           = useState(()=>localStorage.getItem("ced_sb_key")||"");
-      const [foglio, setFoglio]         = useState({clienti:[],proforme:[]});
+      const [foglio, setFoglio]         = useState({clienti:[],proforme:[],pagamenti:[],alias:[]});
+      // Incassi (estratto conto + contanti)
+      const [incMovs, setIncMovs]       = useState([]);
+      const [incMsg, setIncMsg]         = useState("");
+      const [incBusy, setIncBusy]       = useState(false);
+      const [cashCli, setCashCli]       = useState("");
+      const [cashImp, setCashImp]       = useState("");
+      const [cashData, setCashData]     = useState(()=>todayStr());
       const [foglioCat, setFoglioCat]   = useState("focus");
       const [foglioLoad, setFoglioLoad] = useState(false);
       const [foglioSeed, setFoglioSeed] = useState("idle");
@@ -450,7 +457,9 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
         for (let k=5;k>=0;k--){
           const dt=new Date(_today.getFullYear(),_today.getMonth()-k,1);
           const me=new Date(_today.getFullYear(),_today.getMonth()-k+1,1);
-          let v=0; srcInv.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
+          let v=0;
+          if(usaFoglio) (foglio.pagamenti||[]).forEach(p=>{ const pd=new Date(p.data); if(pd>=dt&&pd<me) v+=Number(p.importo)||0; });
+          else srcInv.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
           inc.push({label:mLabels[dt.getMonth()],value:v,color:S.good});
         }
         // Aging crediti aperti — scala blu-grigio che scurisce con l'anzianità (peggiore = clay)
@@ -1079,15 +1088,18 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         try{
           const clienti = await sbGet("clienti","select=*&order=categoria,nome");
           const proforme = await sbGet("proforme","select=*&limit=20000");
-          setFoglio({clienti,proforme});
-          setFoglioMsg(`Caricati ${clienti.length} clienti e ${proforme.length} proforme dal cloud.`);
+          let pagamenti=[], alias=[];
+          try{ pagamenti = await sbGet("pagamenti","select=*&order=data.desc&limit=20000"); }catch(e){}
+          try{ alias = await sbGet("alias_banca","select=*&limit=2000"); }catch(e){}
+          setFoglio({clienti,proforme,pagamenti,alias});
+          setFoglioMsg(`Caricati ${clienti.length} clienti, ${proforme.length} proforme e ${pagamenti.length} pagamenti dal cloud.`);
         }catch(e){ setFoglioMsg("Errore caricamento: "+e.message); }
         setFoglioLoad(false);
       },[]);
 
       // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
       useEffect(()=>{
-        if((tab==="dashboard"||tab==="fatture"||tab==="foglio"||tab==="clienti"||tab==="riconcilia") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
+        if((tab==="dashboard"||tab==="fatture"||tab==="foglio"||tab==="clienti"||tab==="riconcilia"||tab==="incassi") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
       }, [tab]);
 
       const saveCell = async(cliente, periodo, patch)=>{
@@ -1183,6 +1195,80 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           setFoglioSeed("done"); setFoglioMsg(`Importati ${nC} clienti e ${nP} proforma nel database.`);
           await loadFoglio();
         }catch(e){ setFoglioSeed("error"); setFoglioMsg("Errore seed: "+e.message); }
+      };
+
+      // ── INCASSI: estratto conto BPER + contanti ──
+      const ITMESI={gennaio:0,febbraio:1,marzo:2,aprile:3,maggio:4,giugno:5,luglio:6,agosto:7,settembre:8,ottobre:9,novembre:10,dicembre:11};
+      const parseItDate = s => { const m=String(s).trim().match(/(\d{1,2})\s+([a-zà]+)\s+(\d{4})/i); if(!m) return null; const mm=ITMESI[m[2].toLowerCase()]; if(mm==null) return null; return `${m[3]}-${String(mm+1).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`; };
+      const matchClienteBanca = (nome) => {
+        const n=normName(nome); if(!n) return null;
+        const al=(foglio.alias||[]).find(a=>normName(a.testo_banca)===n);
+        if(al){ const c=foglio.clienti.find(x=>x.id===al.cliente_id); if(c) return c; }
+        return foglio.clienti.find(c=>{ const k=normName(c.nome); if(!k) return false;
+          return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); })||null;
+      };
+      const caricaEstratto = async(file)=>{
+        if(!sbReady()){ setIncMsg("⚠ Connetti prima Supabase (tab Foglio)."); return; }
+        setIncBusy(true); setIncMsg("");
+        try{
+          const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:"array"});
+          const g=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:""});
+          let h=-1; for(let i=0;i<g.length;i++){ if(g[i].some(c=>String(c).includes("Data operazione"))){h=i;break;} }
+          if(h<0) throw new Error("Formato non riconosciuto: manca la riga 'Data operazione'");
+          const hr=g[h]; const col={};
+          hr.forEach((c,i)=>{ const t=String(c).toLowerCase(); if(t.includes("data operazione"))col.data=i; else if(t.includes("descrizione"))col.desc=i; else if(t.includes("entrate"))col.ent=i; });
+          const movs=[];
+          for(let i=h+1;i<g.length;i++){
+            const r=g[i]; const ent=parseFloat(r[col.ent]); if(!(ent>0)) continue;
+            const data=parseItDate(r[col.data]); const desc=String(r[col.desc]||"").trim();
+            const m=desc.match(/o\/c:\s*(.+?)(?:\s+ABI-CAB|\s{2,}|$)/);
+            const nome=(m?m[1]:desc.slice(0,45)).trim();
+            const key=(data||"")+"|"+ent.toFixed(2)+"|"+desc.slice(0,40);
+            const dup=(foglio.pagamenti||[]).some(pg=>pg.mov_key===key);
+            movs.push({data,desc,nome,importo:ent,key,dup,cliente:dup?null:matchClienteBanca(nome),fonte:"estratto",state:dup?"dup":undefined});
+          }
+          setIncMovs(movs);
+          const nuovi=movs.filter(m=>!m.dup);
+          setIncMsg(`Letti ${movs.length} incassi (${fmt(movs.reduce((s,m)=>s+m.importo,0))}) · ${nuovi.length} nuovi · ${movs.length-nuovi.length} già registrati · ${nuovi.filter(m=>m.cliente).length} abbinati automaticamente.`);
+        }catch(e){ setIncMsg("Errore lettura estratto: "+e.message); }
+        setIncBusy(false);
+      };
+      // Regola A: proforma con importo uguale, altrimenti la più vecchia aperta (FIFO per scadenza)
+      const confermaIncasso = async(mov, cliente, learnAlias)=>{
+        const open=foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0);
+        let pf=open.find(p=>Math.abs(Number(p.importo)-mov.importo)<0.01);
+        if(!pf&&open.length) pf=[...open].sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")))[0];
+        const pag={cliente_id:cliente.id,proforma_id:pf?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:mov.desc||mov.nome||"",mov_key:mov.key};
+        const ins=await sbInsert("pagamenti",[pag]);
+        if(pf) await sbUpdate("proforme",`id=eq.${pf.id}`,{pagato:true,data_pagamento:pag.data});
+        if(learnAlias && mov.nome){ try{ await sbInsert("alias_banca",[{testo_banca:mov.nome,cliente_id:cliente.id}]); }catch(e){} }
+        setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])],proforme:pf?f.proforme.map(p=>p.id===pf.id?{...p,pagato:true,data_pagamento:pag.data}:p):f.proforme,
+          alias:learnAlias&&mov.nome?[...(f.alias||[]),{testo_banca:mov.nome,cliente_id:cliente.id}]:f.alias}));
+        return pf;
+      };
+      const confermaMov = async(mov, cliente, learn)=>{
+        setIncBusy(true);
+        try{ const pf=await confermaIncasso(mov,cliente,learn);
+          setIncMovs(prev=>prev.map(m=>m.key===mov.key?{...m,state:"done",cliente,pfInfo:pf?(PLABEL[pf.periodo]||pf.periodo):"nessuna proforma aperta"}:m));
+          setIncMsg(`✓ ${cliente.nome}: ${fmt(mov.importo)} registrato${pf?` · segnata PAGATA ${PLABEL[pf.periodo]||pf.periodo}`:" (nessuna proforma aperta abbinata)"}`);
+        }catch(e){ setIncMsg("Errore: "+e.message); }
+        setIncBusy(false);
+      };
+      const confermaTuttiSicuri = async()=>{
+        const sicuri=incMovs.filter(m=>!m.dup && !m.state && m.cliente);
+        if(!sicuri.length){ setIncMsg("Nessun movimento abbinato da confermare."); return; }
+        if(!confirm(`Confermare ${sicuri.length} incassi abbinati automaticamente?`)) return;
+        setIncBusy(true); let ok=0,err=0;
+        for(const m of sicuri){ try{ const pf=await confermaIncasso(m,m.cliente,false); setIncMovs(prev=>prev.map(x=>x.key===m.key?{...x,state:"done",pfInfo:pf?(PLABEL[pf.periodo]||pf.periodo):""}:x)); ok++; }catch(e){ err++; } }
+        setIncMsg(`✓ Registrati ${ok} incassi${err?` · ${err} errori`:""}. Dashboard aggiornata.`);
+        setIncBusy(false);
+      };
+      const registraContanti = async()=>{
+        const cli=foglio.clienti.find(c=>c.id===cashCli); const imp=parseFloat(cashImp);
+        if(!cli||!(imp>0)){ setIncMsg("⚠ Scegli cliente e importo valido."); return; }
+        const mov={data:cashData||todayStr(),importo:imp,nome:cli.nome,desc:"Incasso contanti/POS",key:`CASH|${cli.id}|${cashData}|${imp}|${Date.now()}`,fonte:"contanti"};
+        await confermaMov(mov,cli,false);
+        setCashImp("");
       };
 
       const ydBrowse = useCallback(async(path, token)=>{
@@ -1403,6 +1489,7 @@ In italiano, con numeri ed euro.`,
         {id:"fatture",  label:"Proforma",  icon:"ti-file-invoice"},
         {id:"clienti",  label:"Clienti",   icon:"ti-users"},
         {id:"foglio",   label:"Foglio",    icon:"ti-table"},
+        {id:"incassi",  label:"Incassi",   icon:"ti-cash"},
         {id:"riconcilia",label:"Riconcilia",icon:"ti-arrows-diff"},
         {id:"pagamenti",label:"Pagamenti", icon:"ti-credit-card"},
         {id:"yandex",   label:"Archivio",  icon:"ti-cloud"},
@@ -1977,6 +2064,84 @@ In italiano, con numeri ed euro.`,
                   <p style={{margin:"8px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Scrivi l'importo nelle celle (salva all'uscita dal campo) · clicca "paga/PAGATO" per segnare l'incasso · dati salvati nel cloud Supabase.</p>
                 </>);
               })()}
+            </div>
+          )}
+
+          {/* ══ INCASSI (estratto conto + contanti) ══ */}
+          {tab==="incassi" && (
+            <div>
+              <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:14,padding:"16px 18px",marginBottom:12,boxShadow:"var(--shadow-card)"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <i className="ti ti-cash" style={{fontSize:18,color:S.good}}/><h3 style={{margin:0,fontSize:14,fontWeight:600}}>Incassi · estratto conto e contanti</h3>
+                </div>
+                <p style={{margin:"0 0 10px",fontSize:12,color:"var(--color-text-secondary)"}}>Carica la Lista Movimenti BPER (.xls): i bonifici in entrata vengono abbinati ai clienti e, alla conferma, la proforma giusta viene segnata PAGATA (importo uguale → quella; altrimenti la più vecchia aperta). I duplicati vengono saltati.</p>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <label style={{padding:"9px 16px",background:incBusy?C.grayL:S.slateD,color:"#fff",borderRadius:8,fontSize:12,fontWeight:600,cursor:incBusy?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:6}}>
+                    <i className={`ti ${incBusy?"ti-loader-2 ti-spin":"ti-upload"}`}/>{incBusy?"Elaboro...":"Carica estratto conto (.xls)"}
+                    <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) caricaEstratto(f); e.target.value="";}}/>
+                  </label>
+                  {incMovs.some(m=>!m.dup&&!m.state&&m.cliente) && (
+                    <button onClick={confermaTuttiSicuri} disabled={incBusy} style={{padding:"9px 16px",background:S.good,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                      <i className="ti ti-checks"/>Conferma tutti gli abbinati ({incMovs.filter(m=>!m.dup&&!m.state&&m.cliente).length})
+                    </button>
+                  )}
+                </div>
+                {/* Contanti */}
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:12,paddingTop:12,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                  <span style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:5}}><i className="ti ti-coin" style={{color:S.good}}/>Contanti / POS:</span>
+                  <select value={cashCli} onChange={e=>setCashCli(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12,maxWidth:260}}>
+                    <option value="">— scegli cliente —</option>
+                    {[...foglio.clienti].sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                  </select>
+                  <input type="number" placeholder="Importo €" value={cashImp} onChange={e=>setCashImp(e.target.value)} style={{width:110,padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                  <input type="date" value={cashData} onChange={e=>setCashData(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                  <button onClick={registraContanti} disabled={incBusy} style={{padding:"7px 14px",background:S.good+"18",color:S.good,border:`1px solid ${S.good}44`,borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>Registra</button>
+                </div>
+              </div>
+              {incMsg && <p style={{margin:"0 0 10px",fontSize:12,fontWeight:500,color:incMsg.startsWith("Errore")||incMsg.startsWith("⚠")?C.red:incMsg.startsWith("✓")?S.good:S.slateD,background:"var(--color-background-secondary)",padding:"8px 12px",borderRadius:8}}>{incMsg}</p>}
+
+              {/* Movimenti caricati */}
+              {incMovs.length>0 && (
+                <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)",marginBottom:12}}>
+                  {incMovs.map((m,i)=>{
+                    const done=m.state==="done"||m.dup;
+                    return (
+                    <div key={m.key+i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",opacity:done?.55:1}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:m.dup?C.gray:m.state==="done"?S.good:m.cliente?S.good:S.warn,flexShrink:0}}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.nome}</p>
+                        <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{m.data||"—"}{m.dup?" · già registrato":m.state==="done"?` · ✓ registrato${m.pfInfo?" · PAGATA "+m.pfInfo:""}`:m.cliente?` · → ${m.cliente.nome}`:" · nessun abbinamento"}</p>
+                      </div>
+                      <span style={{fontSize:13,fontWeight:600,color:S.good}}>{fmt(m.importo)}</span>
+                      {!done && m.cliente && <button onClick={()=>confermaMov(m,m.cliente,false)} disabled={incBusy} style={{padding:"4px 10px",background:S.good,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Conferma</button>}
+                      {!done && !m.cliente && (
+                        <select defaultValue="" onChange={e=>{ const c=foglio.clienti.find(x=>x.id===e.target.value); if(c) confermaMov(m,c,true); }} disabled={incBusy} style={{padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,maxWidth:190}}>
+                          <option value="">Abbina a cliente...</option>
+                          {[...foglio.clienti].sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                        </select>
+                      )}
+                    </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Registro incassi dal cloud */}
+              {(foglio.pagamenti||[]).length>0 && (
+                <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <p style={{margin:0,fontSize:13,fontWeight:600}}>Registro incassi ({foglio.pagamenti.length})</p>
+                    <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.reduce((s,p)=>s+(Number(p.importo)||0),0))}</span>
+                  </div>
+                  {foglio.pagamenti.slice(0,50).map(p=>{ const c=foglio.clienti.find(x=>x.id===p.cliente_id); return (
+                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                      <i className={`ti ${p.fonte==="contanti"?"ti-coin":"ti-building-bank"}`} style={{fontSize:13,color:S.good}}/>
+                      <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span></span>
+                      <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
+                    </div>
+                  );})}
+                </div>
+              )}
             </div>
           )}
 
