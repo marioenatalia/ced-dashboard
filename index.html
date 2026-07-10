@@ -399,6 +399,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [incMovs, setIncMovs]       = useState([]);
       const [incMsg, setIncMsg]         = useState("");
       const [incBusy, setIncBusy]       = useState(false);
+      const [incDaData, setIncDaData]   = useState(()=>LS.raw("ced_inc_dadata")||"");
       const [cashCliName, setCashCliName] = useState("");
       const [cashPf, setCashPf]         = useState("auto");
       const [cashImp, setCashImp]       = useState("");
@@ -1218,19 +1219,24 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           if(h<0) throw new Error("Formato non riconosciuto: manca la riga 'Data operazione'");
           const hr=g[h]; const col={};
           hr.forEach((c,i)=>{ const t=String(c).toLowerCase(); if(t.includes("data operazione"))col.data=i; else if(t.includes("descrizione"))col.desc=i; else if(t.includes("entrate"))col.ent=i; });
-          const movs=[];
+          // Esclusi dal perimetro CED (non clienti): compensi partner, fornitori, ecc.
+          const EXCL_BANCA=/METIS\s*CONSULTING|TEAMSYSTEM|CONTI\s+GEREMIA/i;
+          const movs=[]; let saltatiData=0;
           for(let i=h+1;i<g.length;i++){
             const r=g[i]; const ent=parseFloat(r[col.ent]); if(!(ent>0)) continue;
             const data=parseItDate(r[col.data]); const desc=String(r[col.desc]||"").trim();
+            if(incDaData && data && data<incDaData){ saltatiData++; continue; }
             const m=desc.match(/o\/c:\s*(.+?)(?:\s+ABI-CAB|\s{2,}|$)/);
             const nome=(m?m[1]:desc.slice(0,45)).trim();
             const key=(data||"")+"|"+ent.toFixed(2)+"|"+desc.slice(0,40);
+            const escl=EXCL_BANCA.test(nome)||EXCL_BANCA.test(desc);
             const dup=(foglio.pagamenti||[]).some(pg=>pg.mov_key===key);
-            movs.push({data,desc,nome,importo:ent,key,dup,cliente:dup?null:matchClienteBanca(nome),fonte:"estratto",state:dup?"dup":undefined});
+            movs.push({data,desc,nome,importo:ent,key,dup,escl,cliente:(dup||escl)?null:matchClienteBanca(nome),fonte:"estratto",state:dup?"dup":escl?"skip":undefined});
           }
           setIncMovs(movs);
-          const nuovi=movs.filter(m=>!m.dup);
-          setIncMsg(`Letti ${movs.length} incassi (${fmt(movs.reduce((s,m)=>s+m.importo,0))}) · ${nuovi.length} nuovi · ${movs.length-nuovi.length} già registrati · ${nuovi.filter(m=>m.cliente).length} abbinati automaticamente.`);
+          LS.setRaw("ced_inc_dadata", incDaData||"");
+          const nuovi=movs.filter(m=>!m.state);
+          setIncMsg(`Letti ${movs.length} incassi (${fmt(movs.reduce((s,m)=>s+m.importo,0))}) · ${nuovi.length} da gestire · ${movs.filter(m=>m.dup).length} già registrati · ${movs.filter(m=>m.escl).length} esclusi (non CED)${saltatiData?` · ${saltatiData} prima del ${fmtD(incDaData)}`:""} · ${nuovi.filter(m=>m.cliente).length} abbinati automaticamente.`);
         }catch(e){ setIncMsg("Errore lettura estratto: "+e.message); }
         setIncBusy(false);
       };
@@ -2098,6 +2104,9 @@ In italiano, con numeri ed euro.`,
                     <i className={`ti ${incBusy?"ti-loader-2 ti-spin":"ti-upload"}`}/>{incBusy?"Elaboro...":"Carica estratto conto (.xls)"}
                     <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) caricaEstratto(f); e.target.value="";}}/>
                   </label>
+                  <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Solo movimenti dal:</span>
+                  <input type="date" value={incDaData} onChange={e=>setIncDaData(e.target.value)} title="Ignora i movimenti precedenti a questa data (es. già registrati nell'Excel)" style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                  {incDaData && <button onClick={()=>setIncDaData("")} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:12}} title="Rimuovi filtro data"><i className="ti ti-x"/></button>}
                   {incMovs.some(m=>!m.dup&&!m.state&&m.cliente) && (
                     <button onClick={confermaTuttiSicuri} disabled={incBusy} style={{padding:"9px 16px",background:S.good,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                       <i className="ti ti-checks"/>Conferma tutti gli abbinati ({incMovs.filter(m=>!m.dup&&!m.state&&m.cliente).length})
@@ -2147,13 +2156,13 @@ In italiano, con numeri ed euro.`,
               {incMovs.length>0 && (
                 <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)",marginBottom:12}}>
                   {incMovs.map((m,i)=>{
-                    const done=m.state==="done"||m.dup;
+                    const done=m.state==="done"||m.dup||m.state==="skip";
                     return (
                     <div key={m.key+i} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",opacity:done?.55:1}}>
-                      <div style={{width:8,height:8,borderRadius:"50%",background:m.dup?C.gray:m.state==="done"?S.good:m.cliente?S.good:S.warn,flexShrink:0}}/>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:(m.dup||m.state==="skip")?C.gray:m.state==="done"?S.good:m.cliente?S.good:S.warn,flexShrink:0}}/>
                       <div style={{flex:1,minWidth:0}}>
                         <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.nome}</p>
-                        <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{m.data||"—"}{m.dup?" · già registrato":m.state==="done"?` · ✓ registrato${m.pfInfo?" · PAGATA "+m.pfInfo:""}`:m.cliente?` · → ${m.cliente.nome}`:" · nessun abbinamento"}</p>
+                        <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{m.data||"—"}{m.dup?" · già registrato":m.escl?" · escluso (non CED)":m.state==="done"?` · ✓ registrato${m.pfInfo?" · "+m.pfInfo:""}`:m.cliente?` · → ${m.cliente.nome}`:" · nessun abbinamento"}</p>
                       </div>
                       <span style={{fontSize:13,fontWeight:600,color:S.good}}>{fmt(m.importo)}</span>
                       {!done && m.cliente && <button onClick={()=>confermaMov(m,m.cliente,false)} disabled={incBusy} style={{padding:"4px 10px",background:S.good,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Conferma</button>}
