@@ -399,7 +399,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [incMovs, setIncMovs]       = useState([]);
       const [incMsg, setIncMsg]         = useState("");
       const [incBusy, setIncBusy]       = useState(false);
-      const [cashCli, setCashCli]       = useState("");
+      const [cashCliName, setCashCliName] = useState("");
+      const [cashPf, setCashPf]         = useState("auto");
       const [cashImp, setCashImp]       = useState("");
       const [cashData, setCashData]     = useState(()=>todayStr());
       const [foglioCat, setFoglioCat]   = useState("focus");
@@ -1233,24 +1234,39 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         }catch(e){ setIncMsg("Errore lettura estratto: "+e.message); }
         setIncBusy(false);
       };
-      // Regola A: proforma con importo uguale, altrimenti la più vecchia aperta (FIFO per scadenza)
-      const confermaIncasso = async(mov, cliente, learnAlias)=>{
+      // Regola A: proforma con importo uguale, altrimenti la più vecchia aperta (FIFO per scadenza).
+      // Se il pagamento è INFERIORE alla proforma → ACCONTO: il residuo della proforma si riduce, resta aperta.
+      const confermaIncasso = async(mov, cliente, learnAlias, pfChosen)=>{
         const open=foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0);
-        let pf=open.find(p=>Math.abs(Number(p.importo)-mov.importo)<0.01);
+        let pf=pfChosen || open.find(p=>Math.abs(Number(p.importo)-mov.importo)<0.01);
         if(!pf&&open.length) pf=[...open].sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")))[0];
         const pag={cliente_id:cliente.id,proforma_id:pf?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:mov.desc||mov.nome||"",mov_key:mov.key};
         const ins=await sbInsert("pagamenti",[pag]);
-        if(pf) await sbUpdate("proforme",`id=eq.${pf.id}`,{pagato:true,data_pagamento:pag.data});
+        let esito="";
+        if(pf){
+          const imp=Number(pf.importo)||0;
+          if(mov.importo >= imp-0.01){
+            await sbUpdate("proforme",`id=eq.${pf.id}`,{pagato:true,data_pagamento:pag.data});
+            setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===pf.id?{...p,pagato:true,data_pagamento:pag.data}:p)}));
+            esito="PAGATA "+(PLABEL[pf.periodo]||pf.periodo);
+          } else {
+            const residuo=Math.round((imp-mov.importo)*100)/100;
+            const nota=((pf.note||"")+` · acconto ${fmt(mov.importo)} il ${fmtD(pag.data)}`).slice(0,500);
+            await sbUpdate("proforme",`id=eq.${pf.id}`,{importo:residuo,note:nota});
+            setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===pf.id?{...p,importo:residuo,note:nota}:p)}));
+            esito=`ACCONTO su ${PLABEL[pf.periodo]||pf.periodo} · residuo ${fmt(residuo)}`;
+          }
+        }
         if(learnAlias && mov.nome){ try{ await sbInsert("alias_banca",[{testo_banca:mov.nome,cliente_id:cliente.id}]); }catch(e){} }
-        setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])],proforme:pf?f.proforme.map(p=>p.id===pf.id?{...p,pagato:true,data_pagamento:pag.data}:p):f.proforme,
+        setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])],
           alias:learnAlias&&mov.nome?[...(f.alias||[]),{testo_banca:mov.nome,cliente_id:cliente.id}]:f.alias}));
-        return pf;
+        return {pf,esito};
       };
-      const confermaMov = async(mov, cliente, learn)=>{
+      const confermaMov = async(mov, cliente, learn, pfChosen)=>{
         setIncBusy(true);
-        try{ const pf=await confermaIncasso(mov,cliente,learn);
-          setIncMovs(prev=>prev.map(m=>m.key===mov.key?{...m,state:"done",cliente,pfInfo:pf?(PLABEL[pf.periodo]||pf.periodo):"nessuna proforma aperta"}:m));
-          setIncMsg(`✓ ${cliente.nome}: ${fmt(mov.importo)} registrato${pf?` · segnata PAGATA ${PLABEL[pf.periodo]||pf.periodo}`:" (nessuna proforma aperta abbinata)"}`);
+        try{ const {pf,esito}=await confermaIncasso(mov,cliente,learn,pfChosen);
+          setIncMovs(prev=>prev.map(m=>m.key===mov.key?{...m,state:"done",cliente,pfInfo:esito||"nessuna proforma aperta"}:m));
+          setIncMsg(`✓ ${cliente.nome}: ${fmt(mov.importo)} registrato${esito?` · ${esito}`:" (nessuna proforma aperta abbinata)"}`);
         }catch(e){ setIncMsg("Errore: "+e.message); }
         setIncBusy(false);
       };
@@ -1259,16 +1275,18 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         if(!sicuri.length){ setIncMsg("Nessun movimento abbinato da confermare."); return; }
         if(!confirm(`Confermare ${sicuri.length} incassi abbinati automaticamente?`)) return;
         setIncBusy(true); let ok=0,err=0;
-        for(const m of sicuri){ try{ const pf=await confermaIncasso(m,m.cliente,false); setIncMovs(prev=>prev.map(x=>x.key===m.key?{...x,state:"done",pfInfo:pf?(PLABEL[pf.periodo]||pf.periodo):""}:x)); ok++; }catch(e){ err++; } }
+        for(const m of sicuri){ try{ const {esito}=await confermaIncasso(m,m.cliente,false); setIncMovs(prev=>prev.map(x=>x.key===m.key?{...x,state:"done",pfInfo:esito||""}:x)); ok++; }catch(e){ err++; } }
         setIncMsg(`✓ Registrati ${ok} incassi${err?` · ${err} errori`:""}. Dashboard aggiornata.`);
         setIncBusy(false);
       };
       const registraContanti = async()=>{
-        const cli=foglio.clienti.find(c=>c.id===cashCli); const imp=parseFloat(cashImp);
-        if(!cli||!(imp>0)){ setIncMsg("⚠ Scegli cliente e importo valido."); return; }
+        const cli=foglio.clienti.find(c=>c.nome===cashCliName.trim()); const imp=parseFloat(cashImp);
+        if(!cli){ setIncMsg("⚠ Cliente non trovato: scrivi e seleziona un nome dall'elenco."); return; }
+        if(!(imp>0)){ setIncMsg("⚠ Importo non valido."); return; }
+        const pfChosen = cashPf!=="auto" ? foglio.proforme.find(p=>p.id===cashPf) : null;
         const mov={data:cashData||todayStr(),importo:imp,nome:cli.nome,desc:"Incasso contanti/POS",key:`CASH|${cli.id}|${cashData}|${imp}|${Date.now()}`,fonte:"contanti"};
-        await confermaMov(mov,cli,false);
-        setCashImp("");
+        await confermaMov(mov,cli,false,pfChosen);
+        setCashImp(""); setCashPf("auto");
       };
 
       const ydBrowse = useCallback(async(path, token)=>{
@@ -2087,16 +2105,41 @@ In italiano, con numeri ed euro.`,
                   )}
                 </div>
                 {/* Contanti */}
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:12,paddingTop:12,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
-                  <span style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:5}}><i className="ti ti-coin" style={{color:S.good}}/>Contanti / POS:</span>
-                  <select value={cashCli} onChange={e=>setCashCli(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12,maxWidth:260}}>
-                    <option value="">— scegli cliente —</option>
-                    {[...foglio.clienti].sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
-                  </select>
-                  <input type="number" placeholder="Importo €" value={cashImp} onChange={e=>setCashImp(e.target.value)} style={{width:110,padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
-                  <input type="date" value={cashData} onChange={e=>setCashData(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
-                  <button onClick={registraContanti} disabled={incBusy} style={{padding:"7px 14px",background:S.good+"18",color:S.good,border:`1px solid ${S.good}44`,borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>Registra</button>
-                </div>
+                {(()=>{
+                  const cashCliObj = foglio.clienti.find(c=>c.nome===cashCliName.trim());
+                  const cashOpen = cashCliObj ? foglio.proforme.filter(p=>p.cliente_id===cashCliObj.id && !p.pagato && Number(p.importo)>0) : [];
+                  return (
+                  <div style={{marginTop:12,paddingTop:12,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                      <span style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:5}}><i className="ti ti-coin" style={{color:S.good}}/>Contanti / POS:</span>
+                      <div style={{position:"relative"}}>
+                        <i className="ti ti-search" style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontSize:13,color:"var(--color-text-secondary)"}}/>
+                        <input list="cash-cli-list" value={cashCliName} onChange={e=>{setCashCliName(e.target.value); setCashPf("auto");}} placeholder="Cerca azienda..." style={{width:250,padding:"7px 10px 7px 28px",borderRadius:8,border:`1px solid ${cashCliObj?S.good:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                        <datalist id="cash-cli-list">
+                          {[...foglio.clienti].sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.nome}/>)}
+                        </datalist>
+                      </div>
+                      <input type="number" placeholder="Importo €" value={cashImp} onChange={e=>setCashImp(e.target.value)} style={{width:110,padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                      <input type="date" value={cashData} onChange={e=>setCashData(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                      <button onClick={registraContanti} disabled={incBusy||!cashCliObj} style={{padding:"7px 14px",background:cashCliObj?S.good+"18":"var(--color-background-secondary)",color:cashCliObj?S.good:"var(--color-text-secondary)",border:`1px solid ${cashCliObj?S.good+"44":"var(--color-border-tertiary)"}`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>Registra</button>
+                    </div>
+                    {cashCliObj && (
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:8}}>
+                        <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Applica a:</span>
+                        <select value={cashPf} onChange={e=>setCashPf(e.target.value)} style={{padding:"6px 9px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}>
+                          <option value="auto">Automatico (importo uguale, altrimenti la più vecchia)</option>
+                          {cashOpen.map(p=><option key={p.id} value={p.id}>{(PLABEL[p.periodo]||p.periodo)} — {fmt(p.importo)}</option>)}
+                        </select>
+                        {(()=>{ const imp=parseFloat(cashImp); const pf=cashPf!=="auto"?cashOpen.find(p=>p.id===cashPf):null;
+                          if(pf&&imp>0&&imp<Number(pf.importo)-0.01) return <span style={{fontSize:11,color:S.warn,fontWeight:600}}>→ acconto: residuo {fmt(Number(pf.importo)-imp)}</span>;
+                          if(pf&&imp>=Number(pf.importo)-0.01) return <span style={{fontSize:11,color:S.good,fontWeight:600}}>→ salda la proforma</span>;
+                          return null; })()}
+                        <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{cashOpen.length} proforme aperte</span>
+                      </div>
+                    )}
+                  </div>
+                  );
+                })()}
               </div>
               {incMsg && <p style={{margin:"0 0 10px",fontSize:12,fontWeight:500,color:incMsg.startsWith("Errore")||incMsg.startsWith("⚠")?C.red:incMsg.startsWith("✓")?S.good:S.slateD,background:"var(--color-background-secondary)",padding:"8px 12px",borderRadius:8}}>{incMsg}</p>}
 
