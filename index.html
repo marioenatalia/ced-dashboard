@@ -406,6 +406,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [cashData, setCashData]     = useState(()=>todayStr());
       const [cashTipo, setCashTipo]     = useState("contanti");   // contanti | pos | assegno | altro
       const [cashMode, setCashMode]     = useState("acconto");    // acconto | riduzione (se importo < proforma)
+      const [cashRows, setCashRows]     = useState([]);           // righe multiple in coda: [{tipo,importo}]
+      const [soloRecord, setSoloRecord] = useState(false);        // registra solo a registro, NON tocca il dovuto
       const [incPdfCli, setIncPdfCli]   = useState(null);         // nome cliente di cui mostrare i PDF in tab Incassi
       const [editPag, setEditPag]       = useState(null);         // {id,data,importo,fonte,descrizione} pagamento in modifica
       const [foglioCat, setFoglioCat]   = useState("focus");
@@ -1424,15 +1426,73 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         setIncMsg(`✓ Registrati ${ok} incassi${err?` · ${err} errori`:""}. Dashboard aggiornata.`);
         setIncBusy(false);
       };
+      const TIPI_CASH={contanti:"Incasso contanti",pos:"Incasso POS",assegno:"Incasso assegno",sconto:"Sconto concesso",altro:"Incasso (altro)"};
+      // Registrazione manuale multi-riga: applica in sequenza tutte le righe (es. contanti + sconto)
+      // su una copia locale delle proforme aperte. Se soloRecord=true NON tocca le proforme (dovuto invariato).
+      const confermaIncassoMulti = async(rows, cliente, pfChosen, record, data, riduzione)=>{
+        const esiti=[]; const patchLocal=[]; const nuovi=[];
+        let working = foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0)
+          .map(p=>({...p}))
+          .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")));
+        if(pfChosen && !record) working=[...working.filter(p=>p.id===pfChosen.id), ...working.filter(p=>p.id!==pfChosen.id)];
+        for(let ri=0; ri<rows.length; ri++){
+          const row=rows[ri]; const isSconto=row.tipo==="sconto";
+          const primo = record ? (pfChosen?.id||null) : (working.find(p=>!p.pagato && Number(p.importo)>0)?.id||null);
+          const pag={cliente_id:cliente.id,proforma_id:primo,data,importo:row.importo,fonte:row.tipo,
+            descrizione:(TIPI_CASH[row.tipo]||"Incasso")+(record?" (solo per record — notula già in pagato)":""),
+            mov_key:`CASH|${cliente.id}|${data}|${row.importo}|${row.tipo}|${Date.now()}|${ri}`};
+          const ins=await sbInsert("pagamenti",[pag]); nuovi.push(ins[0]);
+          if(record){ esiti.push(`${TIPI_CASH[row.tipo]||"Incasso"} ${fmt(row.importo)} SOLO PER RECORD`); continue; }
+          let resto=row.importo;
+          for(const pf of working){
+            if(resto<=0.009) break;
+            if(pf.pagato || Number(pf.importo)<=0) continue;
+            const imp=Number(pf.importo)||0;
+            if(resto >= imp-0.01){
+              const patch={pagato:true,data_pagamento:data};
+              if(isSconto) patch.note=((pf.note||"")+` · saldata con sconto ${fmt(imp)} il ${fmtD(data)}`).slice(0,500);
+              await sbUpdate("proforme",`id=eq.${pf.id}`,patch);
+              Object.assign(pf,patch); patchLocal.push({id:pf.id,patch});
+              esiti.push((isSconto?"SALDATA CON SCONTO ":"PAGATA ")+(PLABEL[pf.periodo]||pf.periodo));
+              resto=Math.round((resto-imp)*100)/100;
+            } else if(riduzione && !isSconto){
+              const nota=((pf.note||"")+` · importo ridotto da ${fmt(imp)} a ${fmt(resto)} il ${fmtD(data)} (pagamento a saldo)`).slice(0,500);
+              const patch={importo:resto,pagato:true,data_pagamento:data,note:nota};
+              await sbUpdate("proforme",`id=eq.${pf.id}`,patch);
+              Object.assign(pf,patch); patchLocal.push({id:pf.id,patch});
+              esiti.push(`RIDOTTA E SALDATA ${PLABEL[pf.periodo]||pf.periodo} (da ${fmt(imp)} a ${fmt(resto)})`);
+              resto=0;
+            } else {
+              const residuo=Math.round((imp-resto)*100)/100;
+              const nota=((pf.note||"")+` · ${isSconto?"sconto":"acconto"} ${fmt(resto)} il ${fmtD(data)}`).slice(0,500);
+              const patch={importo:residuo,note:nota};
+              await sbUpdate("proforme",`id=eq.${pf.id}`,patch);
+              Object.assign(pf,patch); patchLocal.push({id:pf.id,patch});
+              esiti.push(`${isSconto?"SCONTO":"ACCONTO"} su ${PLABEL[pf.periodo]||pf.periodo} (residuo ${fmt(residuo)})`);
+              resto=0;
+            }
+          }
+          if(resto>0.009) esiti.push(`eccedenza ${fmt(resto)} non allocata`);
+        }
+        setFoglio(f=>({...f,pagamenti:[...nuovi.slice().reverse(),...(f.pagamenti||[])],
+          proforme:f.proforme.map(p=>{ const pls=patchLocal.filter(x=>x.id===p.id); return pls.length?{...p,...Object.assign({},...pls.map(x=>x.patch))}:p; })}));
+        return esiti.join(" · ");
+      };
       const registraContanti = async()=>{
-        const cli=foglio.clienti.find(c=>c.nome===cashCliName.trim()); const imp=parseFloat(cashImp);
+        const cli=foglio.clienti.find(c=>c.nome===cashCliName.trim());
         if(!cli){ setIncMsg("⚠ Cliente non trovato: scrivi e seleziona un nome dall'elenco."); return; }
-        if(!(imp>0)){ setIncMsg("⚠ Importo non valido."); return; }
+        const imp=parseFloat(cashImp);
+        const rows=[...cashRows]; if(imp>0) rows.push({tipo:cashTipo,importo:imp});
+        if(!rows.length){ setIncMsg("⚠ Nessuna riga: inserisci un importo."); return; }
         const pfChosen = cashPf!=="auto" ? foglio.proforme.find(p=>p.id===cashPf) : null;
-        const TIPI={contanti:"Incasso contanti",pos:"Incasso POS",assegno:"Incasso assegno",sconto:"Sconto concesso",altro:"Incasso (altro)"};
-        const mov={data:cashData||todayStr(),importo:imp,nome:cli.nome,desc:TIPI[cashTipo]||"Incasso",key:`CASH|${cli.id}|${cashData}|${imp}|${Date.now()}`,fonte:cashTipo,riduzione:cashMode==="riduzione"};
-        await confermaMov(mov,cli,false,pfChosen);
-        setCashImp(""); setCashPf("auto");
+        setIncBusy(true);
+        try{
+          const esito=await confermaIncassoMulti(rows,cli,pfChosen,soloRecord,cashData||todayStr(),cashMode==="riduzione");
+          const tot=rows.reduce((s,r)=>s+r.importo,0);
+          setIncMsg(`✓ ${cli.nome}: ${fmt(tot)} registrato (${rows.length} rig${rows.length>1?"he":"a"})${esito?` · ${esito}`:" (nessuna proforma aperta abbinata)"}`);
+          setCashImp(""); setCashRows([]); setCashPf("auto"); setSoloRecord(false);
+        }catch(e){ setIncMsg("Errore: "+e.message); }
+        setIncBusy(false);
       };
 
       const ydBrowse = useCallback(async(path, token)=>{
@@ -2271,7 +2331,9 @@ In italiano, con numeri ed euro.`,
                 {/* Contanti */}
                 {(()=>{
                   const cashCliObj = foglio.clienti.find(c=>c.nome===cashCliName.trim());
-                  const cashOpen = cashCliObj ? foglio.proforme.filter(p=>p.cliente_id===cashCliObj.id && !p.pagato && Number(p.importo)>0) : [];
+                  const cashOpen = cashCliObj ? foglio.proforme.filter(p=>p.cliente_id===cashCliObj.id && !p.pagato && Number(p.importo)>0)
+                    .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999"))) : [];
+                  const cashPaid = (soloRecord && cashCliObj) ? foglio.proforme.filter(p=>p.cliente_id===cashCliObj.id && p.pagato) : [];
                   return (
                   <div style={{marginTop:12,paddingTop:12,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
@@ -2292,17 +2354,37 @@ In italiano, con numeri ed euro.`,
                       </div>
                       <input type="number" placeholder="Importo €" value={cashImp} onChange={e=>setCashImp(e.target.value)} style={{width:110,padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
                       <input type="date" value={cashData} onChange={e=>setCashData(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
-                      <button onClick={registraContanti} disabled={incBusy||!cashCliObj} style={{padding:"7px 14px",background:cashCliObj?S.good+"18":"var(--color-background-secondary)",color:cashCliObj?S.good:"var(--color-text-secondary)",border:`1px solid ${cashCliObj?S.good+"44":"var(--color-border-tertiary)"}`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>Registra</button>
+                      <button onClick={()=>{ const v=parseFloat(cashImp); if(!(v>0)){ setIncMsg("⚠ Inserisci un importo prima di aggiungere la riga."); return; } setCashRows(r=>[...r,{tipo:cashTipo,importo:v}]); setCashImp(""); }} disabled={!cashCliObj} title="Aggiungi questa riga e inseriscine un'altra (es. contanti + sconto insieme)" style={{padding:"7px 10px",background:"var(--color-surface)",color:C.purple,border:`1px solid ${C.purple}44`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>＋ riga</button>
+                      <button onClick={registraContanti} disabled={incBusy||!cashCliObj} style={{padding:"7px 14px",background:cashCliObj?S.good+"18":"var(--color-background-secondary)",color:cashCliObj?S.good:"var(--color-text-secondary)",border:`1px solid ${cashCliObj?S.good+"44":"var(--color-border-tertiary)"}`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>Registra{cashRows.length?` ${cashRows.length+(parseFloat(cashImp)>0?1:0)} righe`:""}</button>
                       {cashCliObj && <button onClick={()=>openClientPdfs(cashCliObj.nome)} title="Apri le proforma PDF del cliente da Yandex" style={{padding:"7px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-file-search"/> Proforme PDF</button>}
                     </div>
+                    {cashRows.length>0 && (
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:8}}>
+                        <span style={{fontSize:11,fontWeight:600,color:"var(--color-text-secondary)"}}>Righe in coda:</span>
+                        {cashRows.map((r,i)=>(
+                          <span key={i} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 8px",borderRadius:7,background:C.purpleL,color:C.purple,fontSize:11,fontWeight:600}}>
+                            {({contanti:"💶",pos:"💳",assegno:"🧾",sconto:"🏷️",altro:"•"})[r.tipo]||"•"} {TIPI_CASH[r.tipo]||r.tipo} {fmt(r.importo)}
+                            <button onClick={()=>setCashRows(rows=>rows.filter((_,j)=>j!==i))} title="Rimuovi riga" style={{background:"none",border:"none",color:C.purple,cursor:"pointer",fontSize:12,padding:0,lineHeight:1}}>✕</button>
+                          </span>
+                        ))}
+                        <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>+ riga corrente {parseFloat(cashImp)>0?fmt(parseFloat(cashImp)):"(vuota)"} — totale {fmt(cashRows.reduce((s,r)=>s+r.importo,0)+(parseFloat(cashImp)>0?parseFloat(cashImp):0))}</span>
+                      </div>
+                    )}
                     {cashCliObj && (
                       <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:8}}>
                         <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Applica a:</span>
                         <select value={cashPf} onChange={e=>setCashPf(e.target.value)} style={{padding:"6px 9px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}>
-                          <option value="auto">Automatico (importo uguale, altrimenti la più vecchia)</option>
+                          <option value="auto">{soloRecord?"Nessuna (solo registro)":"Automatico (importo uguale, altrimenti la più vecchia)"}</option>
                           {cashOpen.map(p=><option key={p.id} value={p.id}>{(PLABEL[p.periodo]||p.periodo)} — {fmt(p.importo)}</option>)}
+                          {cashPaid.map(p=><option key={p.id} value={p.id}>✓ PAGATA {(PLABEL[p.periodo]||p.periodo)} — {fmt(p.importo)} (solo riferimento)</option>)}
                         </select>
-                        {(()=>{ const imp=parseFloat(cashImp); const pf=cashPf!=="auto"?cashOpen.find(p=>p.id===cashPf):cashOpen[0];
+                        <label title="Registra il pagamento solo a registro incassi, SENZA toccare le proforme: usalo quando la notula risulta già in pagato (il dovuto è già corretto)" style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:600,color:soloRecord?S.warnD:"var(--color-text-secondary)",cursor:"pointer",padding:"5px 8px",borderRadius:7,border:`1px solid ${soloRecord?S.warnD:"var(--color-border-tertiary)"}`,background:soloRecord?S.warnD+"14":"transparent"}}>
+                          <input type="checkbox" checked={soloRecord} onChange={e=>{setSoloRecord(e.target.checked); setCashPf("auto");}} style={{margin:0}}/>
+                          📝 Solo per record (non tocca il dovuto)
+                        </label>
+                        {soloRecord ? (
+                          <span style={{fontSize:11,color:S.warnD,fontWeight:600}}>→ registrato solo a registro incassi · dovuto invariato (notula già in pagato)</span>
+                        ) : (()=>{ const imp=parseFloat(cashImp); const pf=cashPf!=="auto"?cashOpen.find(p=>p.id===cashPf):cashOpen[0];
                           const parziale = pf && imp>0 && imp < Number(pf.importo)-0.01;
                           return (<>
                             {parziale && (
@@ -2313,12 +2395,21 @@ In italiano, con numeri ed euro.`,
                             )}
                             {parziale && cashMode==="acconto" && <span style={{fontSize:11,color:S.warn,fontWeight:600}}>→ {cashTipo==="sconto"?"sconto":"acconto"}: residuo {fmt(Number(pf.importo)-imp)}</span>}
                             {parziale && cashMode==="riduzione" && <span style={{fontSize:11,color:S.warnD,fontWeight:600}}>→ SALDATA: debito ridotto da {fmt(Number(pf.importo))} a {fmt(imp)}</span>}
-                            {pf && imp>=Number(pf.importo)-0.01 && imp>0 && <span style={{fontSize:11,color:S.good,fontWeight:600}}>→ salda la proforma</span>}
+                            {pf && imp>=Number(pf.importo)-0.01 && imp>0 && !cashRows.length && <span style={{fontSize:11,color:S.good,fontWeight:600}}>→ salda la proforma</span>}
+                            {cashRows.length>0 && <span style={{fontSize:11,color:C.purple,fontWeight:600}}>→ le righe verranno applicate in sequenza (FIFO)</span>}
                           </>);
                         })()}
                         <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{cashOpen.length} proforme aperte</span>
                       </div>
                     )}
+                    {cashCliObj && (()=>{ const tgt = cashPf!=="auto" ? [...cashOpen,...cashPaid].find(p=>p.id===cashPf) : cashOpen[0];
+                      if(!tgt || !tgt.note) return null;
+                      return (
+                        <div style={{marginTop:6,padding:"6px 10px",borderRadius:7,background:S.warn+"10",border:`1px solid ${S.warn}33`,fontSize:11,color:"var(--color-text-primary)",maxWidth:700}}>
+                          <b>📌 Nota proforma {(PLABEL[tgt.periodo]||tgt.periodo)}:</b> <span style={{fontStyle:"italic"}}>{tgt.note}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                   );
                 })()}
