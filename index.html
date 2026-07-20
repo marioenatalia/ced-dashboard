@@ -1095,9 +1095,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           if(recoRef.current.stop||depth>5) return;
           let d; try{ d=await ydList(ydToken,path);}catch(e){return;}
           for(const it of (d._embedded?.items||[])){
-            if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf") && it.name.includes("2026")){
-              const fold=clientFolder||basenameOf(path);
-              if(foldMatch(fold)) pdfs.push({path:it.path,name:it.name,folder:fold,paid:/pagat|saldat/i.test(path)});
+            if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf")){
+              // È una proforma 2026 se: anno nel nome file (doc...2026...) oppure notula
+              // TeamSystem PFAT-nnn caricata/modificata nel 2026 (l'anno non è nel nome)
+              const anno2026 = it.name.includes("2026") || (/pfat/i.test(it.name) && ((it.created||it.modified||"").slice(0,4)==="2026"));
+              if(anno2026){
+                const fold=clientFolder||basenameOf(path);
+                if(foldMatch(fold)) pdfs.push({path:it.path,name:it.name,folder:fold,paid:/pagat|saldat/i.test(path)});
+              }
             }
             else if(it.type==="dir"){
               if(depth===0 && /ex\s*clienti/i.test(it.name)) continue;
