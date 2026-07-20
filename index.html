@@ -3008,8 +3008,12 @@ In italiano, con numeri ed euro.`,
           {incPdfCli && (()=>{
             const cf=cliFiles[incPdfCli];
             const nomeUp=incPdfCli.trim().toUpperCase();
-            const cliObj = foglio.clienti.find(c=>c.nome.trim().toUpperCase()===nomeUp)
-              || foglio.clienti.find(c=>{const n=c.nome.trim().toUpperCase(); return n.includes(nomeUp)||nomeUp.includes(n);});
+            const _n=normName(incPdfCli), _nc=normCore(incPdfCli);
+            const _al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca); return t&&_n&&(t===_n||(t.length>6&&_n.includes(t))||(_n.length>6&&t.includes(_n))); });
+            const cliObj = (_al && foglio.clienti.find(c=>c.id===_al.cliente_id))
+              || foglio.clienti.find(c=>c.nome.trim().toUpperCase()===nomeUp)
+              || foglio.clienti.find(c=>{const n=c.nome.trim().toUpperCase(); return n.includes(nomeUp)||nomeUp.includes(n);})
+              || foglio.clienti.find(c=>{const kc=normCore(c.nome); return kc&&_nc&&(kc===_nc||(kc.length>7&&_nc.startsWith(kc))||(_nc.length>7&&kc.startsWith(_nc)));});
             const pfs = cliObj ? foglio.proforme.filter(p=>p.cliente_id===cliObj.id) : [];
             const aperte = pfs.filter(p=>!p.pagato && Number(p.importo)>0)
               .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")));
