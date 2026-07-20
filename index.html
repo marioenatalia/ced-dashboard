@@ -691,8 +691,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const arr = Object.values(found).filter(c=>c.open>0||c.paid>0).sort((a,b)=>b.open-a.open||a.name.localeCompare(b.name));
           setFolderClients(arr);
         };
-        const countPdfsInDir = async (path)=>{
-          try { const d = await ydList(ydToken, path); return (d._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf")).length; }
+        const countPdfsInDir = async (path,depth=0)=>{
+          if(depth>3) return 0;
+          try { const d = await ydList(ydToken, path); let n=0;
+            for(const it of (d._embedded?.items||[])){
+              if(it.type==="file"&&it.name.toLowerCase().endsWith(".pdf")) n++;
+              else if(it.type==="dir") n+=await countPdfsInDir(it.path,depth+1);
+            }
+            return n; }
           catch { return 0; }
         };
         const basename = p => p.replace(/\/+$/,"").split("/").pop();
@@ -843,11 +849,18 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const byDateDesc=(a,b)=>(pdfEmissDate(b)||"").localeCompare(pdfEmissDate(a)||"");
           const openPdfs = items.filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf")).sort(byDateDesc);
           const pagatoDirs = items.filter(it=>it.type==="dir"&&isExcludedDir(it.name));
+          // raccolta RICORSIVA: dentro "pagato" ci sono spesso sottocartelle per anno (es. pagato/2026/)
           let paidPdfs = [];
-          for (const pd of pagatoDirs) {
-            try { const sd = await ydList(ydToken, pd.path);
-              paidPdfs = paidPdfs.concat((sd._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"))); } catch(e){}
-          }
+          const raccogli = async(path,depth)=>{
+            if(depth>3) return;
+            try{ const sd = await ydList(ydToken, path);
+              for(const it of (sd._embedded?.items||[])){
+                if(it.type==="file"&&it.name.toLowerCase().endsWith(".pdf")) paidPdfs.push(it);
+                else if(it.type==="dir") await raccogli(it.path,depth+1);
+              }
+            }catch(e){}
+          };
+          for (const pd of pagatoDirs) await raccogli(pd.path,0);
           paidPdfs.sort(byDateDesc);
           setCliFiles(m=>({...m,[cli.name]:{loading:false, open:openPdfs, paid:paidPdfs}}));
         } catch(e) {
@@ -1045,7 +1058,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         // 1) raccogli PDF 2026 (cartella cliente + sottocartelle, salta EX CLIENTI)
         const pdfs=[];
         const walk=async(path,depth,clientFolder)=>{
-          if(recoRef.current.stop||depth>3) return;
+          if(recoRef.current.stop||depth>5) return;
           let d; try{ d=await ydList(ydToken,path);}catch(e){return;}
           for(const it of (d._embedded?.items||[])){
             if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf") && it.name.includes("2026"))
