@@ -387,6 +387,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [excelStatus, setExcelStatus] = useState(()=>LS.raw("ced_excel_at")?("done"):"idle");
       const [excelInfo, setExcelInfo]   = useState(()=>LS.get("ced_excel_info",null)); // {attivi,usciti,totale,at}
       const [recoStatus, setRecoStatus] = useState("idle");
+      const [recoSolo, setRecoSolo]     = useState("");   // riconciliazione limitata a un solo cliente/cartella
       const [recoProg, setRecoProg]     = useState({done:0,total:0});
       const [recoRows, setRecoRows]     = useState(()=>LS.get("ced_reco_rows",[]));
       const [recoFilter, setRecoFilter] = useState("mancanti"); // mancanti|tutti
@@ -1092,10 +1093,17 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             await walk(t.path,1,null);
           }
         }catch(e){ addLog("Errore scansione: "+e.message,"error"); }
-        addLog(`Trovate ${pdfs.length} proforma 2026. Lettura AI...`);
-        setRecoProg({done:0,total:pdfs.length});
+        // Filtro singolo cliente: legge solo le cartelle che corrispondono (risparmia tempo e costi AI)
+        const filt=(recoSolo||"").trim(); let pdfsUse=pdfs;
+        if(filt){ const fn=normName(filt);
+          pdfsUse=pdfs.filter(p=>{ const k=normName(p.folder); return k&&fn&&(k.includes(fn)||fn.includes(k)); });
+          addLog(`Filtro cliente "${filt}": ${pdfsUse.length} PDF su ${pdfs.length} totali`,"ok");
+          if(!pdfsUse.length) addLog(`⚠ Nessuna cartella corrisponde a "${filt}" — controlla il nome`,"error");
+        }
+        addLog(`Trovate ${pdfsUse.length} proforma 2026. Lettura AI...`);
+        setRecoProg({done:0,total:pdfsUse.length});
         const rows=[]; let done=0;
-        for(const it of pdfs){
+        for(const it of pdfsUse){
           if(recoRef.current.stop){ addLog("⏹ Interrotto","skip"); break; }
           try{
             const { buf } = await downloadAndStorePdf(ydToken, it.path, it.name);
@@ -1111,17 +1119,21 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
               competenza:d?.competenza||"", imponibile:d?.importo_imponibile||0, totale:d?.importo_totale||0,
               inExcel: wl===true, parseFail:!d, state: savedStates[it.path] };
             rows.push(row); done++;
-            if(done%5===0||done===pdfs.length){ setRecoRows([...rows]); }
-            setRecoProg({done,total:pdfs.length});
+            if(!filt && (done%5===0||done===pdfsUse.length)){ setRecoRows([...rows]); }
+            setRecoProg({done,total:pdfsUse.length});
             if(!row.inExcel) addLog(`🔴 ${row.cliente} — ${row.periodo} ${fmt(row.totale)} — NON in Excel`,"error");
-          }catch(e){ done++; setRecoProg({done,total:pdfs.length}); }
+          }catch(e){ done++; setRecoProg({done,total:pdfsUse.length}); }
         }
-        setRecoRows([...rows]); LS.set("ced_reco_rows", rows);
+        if(filt){
+          // run filtrato: aggiorna solo le righe del cliente, il resto della lista rimane
+          setRecoRows(prev=>{ const others=prev.filter(r=>!rows.some(n=>recoKey(n)===recoKey(r)));
+            const next=[...rows,...others]; LS.set("ced_reco_rows",next); return next; });
+        } else { setRecoRows([...rows]); LS.set("ced_reco_rows", rows); }
         const miss=rows.filter(r=>!r.inExcel); const missTot=miss.reduce((s,r)=>s+(r.totale||0),0);
-        addLog(`Riconciliazione completata: ${rows.length} lette · ${miss.length} fuori Excel (${fmt(missTot)})`,"ok");
+        addLog(`Riconciliazione completata: ${rows.length} lette${filt?` (solo "${filt}")`:""} · ${miss.length} fuori Excel (${fmt(missTot)})`,"ok");
         LS.set("ced_sync_log", log);
         setRecoStatus(recoRef.current.stop?"idle":"done");
-      }, [ydToken]);
+      }, [ydToken, recoSolo]);
 
       // ── FOGLIO PAGAMENTI (Supabase) ──
       const PERIODI = { focus:["I","II","III","IV"], ragazzi:["I_SEM","II_SEM","ANNO"], altri:["GEN","FEB","MAR","APR","MAG","GIU","LUG","AGO","SET","OTT","NOV","DIC"], bilancio:["BILANCIO"], nuovi:[] };
@@ -2534,6 +2546,9 @@ In italiano, con numeri ed euro.`,
                 </div>
                 <p style={{margin:"0 0 10px",fontSize:12,color:"var(--color-text-secondary)"}}>Legge le proforma 2026 da Yandex (con AI Haiku) ed estrae cliente · data · periodo · importo, poi le incrocia con l'Excel per trovare gli scostamenti. Costo stimato ~€0,003 per documento.</p>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <datalist id="reco-cli-list">{[...foglio.clienti].sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.nome}/>)}</datalist>
+                  <input list="reco-cli-list" value={recoSolo} onChange={e=>setRecoSolo(e.target.value)} placeholder="Solo un cliente (vuoto = tutti)..." title="Scrivi il nome (o parte del nome) per riconciliare SOLO quel cliente: veloce ed economico. Le altre righe della lista restano." style={{width:230,padding:"8px 10px",borderRadius:8,border:`1px solid ${recoSolo?S.slateD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                  {recoSolo && <button onClick={()=>setRecoSolo("")} title="Togli il filtro (riconcilia tutti)" style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:13}}>✕</button>}
                   <button onClick={runReconciliation} disabled={recoStatus==="running"||!ydToken} style={{padding:"9px 18px",background:recoStatus==="running"?C.grayL:S.slateD,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:recoStatus==="running"||!ydToken?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:6}}>
                     <i className={`ti ${recoStatus==="running"?"ti-loader-2 ti-spin":"ti-scan"}`}/>{recoStatus==="running"?"Lettura in corso...":"Avvia riconciliazione"}
                   </button>
