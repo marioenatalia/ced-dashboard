@@ -825,20 +825,30 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         setReadAllStatus("done");
       }, [ydToken, folderClients, invoices]);
 
+      // Data di emissione stimata di un PDF: dal nome file scanner (contiene AAAAMMGG),
+      // altrimenti data di creazione/caricamento su Yandex.
+      const pdfEmissDate = it => {
+        const m=(it.name||"").match(/(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/);
+        if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+        return (it.created||it.modified||"").slice(0,10);
+      };
       // Carica l'elenco dei PDF di un cliente: "da pagare" (cartella) + "pagate" (sottocartelle PAGATO)
+      // Ordinati per data di emissione, i più recenti in alto.
       const loadClientFiles = useCallback(async(cli)=>{
         if (!ydToken) return;
         setCliFiles(m=>({...m,[cli.name]:{loading:true, open:[], paid:[]}}));
         try {
           const data  = await ydList(ydToken, cli.path);
           const items = data._embedded?.items || [];
-          const openPdfs = items.filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"));
+          const byDateDesc=(a,b)=>(pdfEmissDate(b)||"").localeCompare(pdfEmissDate(a)||"");
+          const openPdfs = items.filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf")).sort(byDateDesc);
           const pagatoDirs = items.filter(it=>it.type==="dir"&&isExcludedDir(it.name));
           let paidPdfs = [];
           for (const pd of pagatoDirs) {
             try { const sd = await ydList(ydToken, pd.path);
               paidPdfs = paidPdfs.concat((sd._embedded?.items||[]).filter(it=>it.type==="file"&&it.name.toLowerCase().endsWith(".pdf"))); } catch(e){}
           }
+          paidPdfs.sort(byDateDesc);
           setCliFiles(m=>({...m,[cli.name]:{loading:false, open:openPdfs, paid:paidPdfs}}));
         } catch(e) {
           setCliFiles(m=>({...m,[cli.name]:{loading:false, open:[], paid:[], error:e.message}}));
@@ -2337,13 +2347,17 @@ In italiano, con numeri ed euro.`,
                     {cf.open.length>0 && <p style={{margin:"4px 0 2px",fontSize:11,fontWeight:600,color:S.warn}}>DA PAGARE ({cf.open.length})</p>}
                     {cf.open.map((f,i)=>(
                       <button key={"o"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-primary)"}}>
-                        <i className="ti ti-file-type-pdf" style={{color:C.purple}}/>{f.name}
+                        <span style={{color:C.purple}}>📄</span>
+                        <span style={{minWidth:74,fontWeight:600,color:S.slateD}}>{pdfEmissDate(f)?fmtD(pdfEmissDate(f)):"—"}</span>
+                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span>
                       </button>
                     ))}
                     {cf.paid.length>0 && <p style={{margin:"8px 0 2px",fontSize:11,fontWeight:600,color:S.good}}>PAGATE ({cf.paid.length})</p>}
                     {cf.paid.map((f,i)=>(
                       <button key={"p"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>
-                        <i className="ti ti-file-check" style={{color:S.good}}/>{f.name}
+                        <span style={{color:S.good}}>✅</span>
+                        <span style={{minWidth:74,fontWeight:600,color:S.good}}>{pdfEmissDate(f)?fmtD(pdfEmissDate(f)):"—"}</span>
+                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span>
                       </button>
                     ))}
                     {!cf.error && cf.open.length===0 && cf.paid.length===0 && <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Nessun PDF nella cartella.</p>}
