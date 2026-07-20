@@ -1064,22 +1064,45 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         await loadFoglio();
         setRecoAddMsg(`✓ Aggiunte ${added} proforma al Foglio${err?` · ${err} errori`:""}. Controlla Dashboard/Clienti.`);
       };
+      // Sincronizza TUTTE le righe lette nel Foglio: crea le proforma mancanti (es. III trim)
+      // e aggiorna importo/stato pagato dalle notule. Idempotente: aggiorna se esiste, crea se manca.
+      const syncAllRecoToFoglio = async()=>{
+        if(!sbReady()){ setRecoAddMsg("⚠ Connetti prima Supabase (tab Foglio)"); return; }
+        const da=recoRows.filter(r=>(r.totale||0)>0 && r.state!=="excluded" && !r.parseFail);
+        if(!da.length){ setRecoAddMsg("Nessuna riga letta da sincronizzare."); return; }
+        if(!confirm(`Sincronizzare ${da.length} proforma nel Foglio?\n\n• crea quelle mancanti (es. III trimestre nuovo)\n• aggiorna importo e stato PAGATO in base alle notule di Yandex\n• per quei periodi i valori attuali del Foglio vengono sovrascritti`)) return;
+        setRecoAddMsg(`Sincronizzazione di ${da.length} proforma in corso...`);
+        const cc=[...foglio.clienti], pc=[...foglio.proforme]; let ok=0, err=0;
+        for(const r of da){ try{ await _pushRecoRow(r, cc, pc); saveRecoState(r,"added"); ok++; }catch(e){ err++; } }
+        setRecoRows(prev=>{ const next=prev.map(r=> da.includes(r)?{...r,state:"added"}:r); LS.set("ced_reco_rows",next); return next; });
+        await loadFoglio();
+        setRecoAddMsg(`✓ Sincronizzate ${ok} proforma nel Foglio${err?` · ${err} errori`:""}. Dashboard aggiornata.`);
+      };
       const runReconciliation = useCallback(async()=>{
         if (!ydToken) { setYdError("Token Yandex mancante"); return; }
         if (!LS.raw("ced_api_key")) { setYdError("API key Anthropic non configurata"); return; }
         recoRef.current.stop=false; setRecoStatus("running");
         const log=[]; const addLog=(m,t="info")=>{log.push({msg:m,type:t,ts:new Date().toLocaleTimeString("it-IT")}); setSyncLog([...log]);};
-        addLog("Riconciliazione: raccolta proforma 2026 da Yandex...");
+        // Filtro singolo cliente: salta direttamente le cartelle che non corrispondono (scansione veloce)
+        const filt=(recoSolo||"").trim();
+        const fnN=normName(filt), fnC=normCore(filt);
+        const foldMatch = name => { if(!filt) return true; const k=normName(name), kc=normCore(name);
+          return (k&&fnN&&(k.includes(fnN)||fnN.includes(k))) || (kc&&fnC&&(kc.slice(0,6)===fnC.slice(0,6))); };
+        addLog(filt?`Riconciliazione SOLO per "${filt}"...`:"Riconciliazione: raccolta proforma 2026 da Yandex...");
         // 1) raccogli PDF 2026 (cartella cliente + sottocartelle, salta EX CLIENTI)
         const pdfs=[];
         const walk=async(path,depth,clientFolder)=>{
           if(recoRef.current.stop||depth>5) return;
           let d; try{ d=await ydList(ydToken,path);}catch(e){return;}
           for(const it of (d._embedded?.items||[])){
-            if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf") && it.name.includes("2026"))
-              pdfs.push({path:it.path,name:it.name,folder:clientFolder||basenameOf(path),paid:/pagat|saldat/i.test(path)});
+            if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf") && it.name.includes("2026")){
+              const fold=clientFolder||basenameOf(path);
+              if(foldMatch(fold)) pdfs.push({path:it.path,name:it.name,folder:fold,paid:/pagat|saldat/i.test(path)});
+            }
             else if(it.type==="dir"){
               if(depth===0 && /ex\s*clienti/i.test(it.name)) continue;
+              // depth 1 = cartella cliente: col filtro attivo si scende solo in quelle giuste
+              if(depth===1 && !clientFolder && !foldMatch(it.name)) continue;
               await walk(it.path, depth+1, depth>=1?(clientFolder||basenameOf(path)) : it.name);
             }
           }
@@ -1093,13 +1116,8 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             await walk(t.path,1,null);
           }
         }catch(e){ addLog("Errore scansione: "+e.message,"error"); }
-        // Filtro singolo cliente: legge solo le cartelle che corrispondono (risparmia tempo e costi AI)
-        const filt=(recoSolo||"").trim(); let pdfsUse=pdfs;
-        if(filt){ const fn=normName(filt);
-          pdfsUse=pdfs.filter(p=>{ const k=normName(p.folder); return k&&fn&&(k.includes(fn)||fn.includes(k)); });
-          addLog(`Filtro cliente "${filt}": ${pdfsUse.length} PDF su ${pdfs.length} totali`,"ok");
-          if(!pdfsUse.length) addLog(`⚠ Nessuna cartella corrisponde a "${filt}" — controlla il nome`,"error");
-        }
+        const pdfsUse=pdfs;
+        if(filt && !pdfsUse.length) addLog(`⚠ Nessuna cartella/PDF 2026 corrisponde a "${filt}" — controlla il nome`,"error");
         addLog(`Trovate ${pdfsUse.length} proforma 2026. Lettura AI...`);
         setRecoProg({done:0,total:pdfsUse.length});
         const rows=[]; let done=0;
@@ -2575,6 +2593,7 @@ In italiano, con numeri ed euro.`,
                       <button key={k} onClick={()=>setRecoFilter(k)} style={{padding:"5px 12px",borderRadius:20,border:recoFilter===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:recoFilter===k?S.slateD+"15":"transparent",color:recoFilter===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:recoFilter===k?600:400}}>{l}</button>
                     ))}
                     {miss.length>0 && <button onClick={addAllRecoToFoglio} title="Aggiungi tutte le nuove al Foglio" style={{marginLeft:"auto",padding:"5px 12px",borderRadius:8,border:"none",background:S.slateD,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-database-plus"/>Aggiungi tutte al Foglio</button>}
+                    {recoRows.length>0 && <button onClick={syncAllRecoToFoglio} title="Crea le proforma mancanti (es. III trimestre) e aggiorna importi/stato pagato dalle notule, per TUTTE le righe lette (anche quelle già in Excel)" style={{marginLeft:miss.length>0?0:"auto",padding:"5px 12px",borderRadius:8,border:`1px solid ${S.slateD}`,background:"transparent",color:S.slateD,fontSize:12,fontWeight:600,cursor:"pointer"}}>⟳ Sincronizza Foglio ({recoRows.filter(r=>(r.totale||0)>0&&r.state!=="excluded"&&!r.parseFail).length})</button>}
                   </div>
                   {recoAddMsg && <p style={{margin:"0 0 10px",fontSize:12,fontWeight:500,color:recoAddMsg.startsWith("Errore")||recoAddMsg.startsWith("⚠")?C.red:recoAddMsg.startsWith("✓")?S.good:S.slateD,background:"var(--color-background-secondary)",padding:"8px 12px",borderRadius:8}}>{recoAddMsg}</p>}
                   <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
