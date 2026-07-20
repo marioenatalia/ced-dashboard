@@ -2450,6 +2450,7 @@ In italiano, con numeri ed euro.`,
                       <span style={{fontSize:13,fontWeight:600,color:S.good}}>{fmt(m.importo)}</span>
                       {m.cliente && <button onClick={()=>openClientPdfs(m.cliente.nome)} title="Apri le proforma PDF del cliente" style={{padding:"4px 7px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:6,fontSize:11,cursor:"pointer"}}>📄</button>}
                       {!done && m.cliente && <button onClick={()=>confermaMov(m,m.cliente,false)} disabled={incBusy} style={{padding:"4px 10px",background:S.good,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Conferma</button>}
+                      {!done && m.cliente && <button onClick={()=>{ setIncMovs(prev=>prev.map(x=>x.key===m.key?{...x,cliente:null}:x)); setIncLink(v=>({...v,[m.key]:""})); }} disabled={incBusy} title="Abbinamento sbagliato? Scollega e scegli il cliente giusto (es. omonimi come i due Zanetti)" style={{padding:"4px 8px",background:"var(--color-background-secondary)",color:S.warnD,border:`1px solid ${S.warnD}44`,borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>🔁</button>}
                       {!done && !m.cliente && (<>
                         <input list="cash-cli-list" value={incLink[m.key]||""} onChange={e=>setIncLink(v=>({...v,[m.key]:e.target.value}))} placeholder="Cerca cliente..." style={{padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,width:170}}/>
                         <button onClick={()=>{ const c=foglio.clienti.find(x=>x.nome===(incLink[m.key]||"").trim()); if(!c){ setIncMsg("⚠ Scrivi il nome e selezionalo dall'elenco, poi premi 🔗 Collega."); return; } collegaMov(m,c); }} disabled={incBusy} title="Collega questo nome banca al cliente (memorizzato per i prossimi estratti) SENZA registrare il pagamento" style={{padding:"4px 9px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}44`,borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>🔗 Collega</button>
@@ -2980,7 +2981,19 @@ In italiano, con numeri ed euro.`,
                           <span style={{minWidth:16}}>{p.pagato?"✅":(isScad?"🔴":"🟡")}</span>
                           <span style={{minWidth:60,fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
                           <span style={{minWidth:80,fontWeight:600,color:p.pagato?S.good:(isScad?C.red:S.warnD)}}>{fmt(p.importo)}</span>
-                          <span style={{minWidth:120,fontSize:11,color:"var(--color-text-secondary)"}}>{p.pagato?`pagata ${p.data_pagamento?fmtD(p.data_pagamento):""}`:(sc?`scad. ${fmtD(sc)}`:"")}</span>
+                          {p.pagato ? (
+                            <span style={{minWidth:120,fontSize:11,color:"var(--color-text-secondary)"}}>{`pagata ${p.data_pagamento?fmtD(p.data_pagamento):""}`}</span>
+                          ) : (
+                            <span style={{display:"inline-flex",alignItems:"center",gap:4,minWidth:170}}>
+                              <input type="date" value={p.scadenza||""} onChange={async e=>{ const v=e.target.value||null;
+                                try{ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v});
+                                  setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:v}:x)}));
+                                }catch(err){ alert("Errore salvataggio scadenza: "+err.message); } }}
+                                title="Scadenza personalizzata: i solleciti WhatsApp contano i giorni da questa data (vuota = scadenza standard del periodo)"
+                                style={{padding:"2px 5px",borderRadius:5,border:`1px solid ${p.scadenza?S.warnD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:112}}/>
+                              <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{p.scadenza?"":(sc?`std ${fmtD(sc)}`:"")}</span>
+                            </span>
+                          )}
                           {p.note && <span style={{flex:1,fontSize:10,fontStyle:"italic",color:S.warnD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p.note}>📌 {p.note}</span>}
                         </div>
                       );})}
