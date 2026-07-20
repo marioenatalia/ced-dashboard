@@ -411,6 +411,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [cashMode, setCashMode]     = useState("acconto");    // acconto | riduzione (se importo < proforma)
       const [cashRows, setCashRows]     = useState([]);           // righe multiple in coda: [{tipo,importo}]
       const [soloRecord, setSoloRecord] = useState(false);        // registra solo a registro, NON tocca il dovuto
+      const [cashNota, setCashNota]     = useState("");           // promemoria libero (es. rinnovo CNS, Fatture in Cloud)
       const [incPdfCli, setIncPdfCli]   = useState(null);         // nome cliente di cui mostrare i PDF in tab Incassi
       const [editPag, setEditPag]       = useState(null);         // {id,data,importo,fonte,descrizione} pagamento in modifica
       const [foglioCat, setFoglioCat]   = useState("focus");
@@ -1386,13 +1387,24 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       // di scadenza (FIFO): salda le più vecchie finché il pagamento copre, l'ultima parte è ACCONTO.
       // Se il pagamento è inferiore alla prima → acconto (residuo ridotto, resta aperta).
       const confermaIncasso = async(mov, cliente, learnAlias, pfChosen)=>{
+        const nota=(mov.nota||"").trim();
+        // SOLO PER RECORD: incassi non legati a proforma (rinnovi CNS, Fatture in Cloud, ecc.)
+        // o notule già in "pagato": vanno a registro con promemoria, senza toccare il dovuto.
+        if(mov.soloRecord){
+          const pag={cliente_id:cliente.id,proforma_id:null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",
+            descrizione:((mov.desc||mov.nome||"")+(nota?` — 📝 ${nota}`:"")+" (solo per record)").slice(0,300),mov_key:mov.key};
+          const ins=await sbInsert("pagamenti",[pag]);
+          if(learnAlias && mov.nome){ try{ await sbInsert("alias_banca",[{testo_banca:mov.nome,cliente_id:cliente.id}]); }catch(e){} }
+          setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])]}));
+          return {pf:null,esito:"SOLO PER RECORD · dovuto invariato"+(nota?` · ${nota}`:"")};
+        }
         const open=foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0)
           .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")));
         // coda di allocazione: proforma scelta a mano, oppure match esatto, oppure FIFO su tutte
         let coda;
         if(pfChosen) coda=[pfChosen];
         else { const esatta=open.find(p=>Math.abs(Number(p.importo)-mov.importo)<0.01); coda = esatta ? [esatta] : open; }
-        const pag={cliente_id:cliente.id,proforma_id:coda[0]?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:mov.desc||mov.nome||"",mov_key:mov.key};
+        const pag={cliente_id:cliente.id,proforma_id:coda[0]?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:((mov.desc||mov.nome||"")+(nota?` — 📝 ${nota}`:"")).slice(0,300),mov_key:mov.key};
         const ins=await sbInsert("pagamenti",[pag]);
         let resto=mov.importo; const esiti=[]; const patchLocal=[];
         const isSconto = mov.fonte==="sconto";
@@ -1450,7 +1462,8 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const TIPI_CASH={contanti:"Incasso contanti",pos:"Incasso POS",assegno:"Incasso assegno",sconto:"Sconto concesso",altro:"Incasso (altro)"};
       // Registrazione manuale multi-riga: applica in sequenza tutte le righe (es. contanti + sconto)
       // su una copia locale delle proforme aperte. Se soloRecord=true NON tocca le proforme (dovuto invariato).
-      const confermaIncassoMulti = async(rows, cliente, pfChosen, record, data, riduzione)=>{
+      const confermaIncassoMulti = async(rows, cliente, pfChosen, record, data, riduzione, nota)=>{
+        nota=(nota||"").trim();
         const esiti=[]; const patchLocal=[]; const nuovi=[];
         let working = foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0)
           .map(p=>({...p}))
@@ -1460,7 +1473,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const row=rows[ri]; const isSconto=row.tipo==="sconto";
           const primo = record ? (pfChosen?.id||null) : (working.find(p=>!p.pagato && Number(p.importo)>0)?.id||null);
           const pag={cliente_id:cliente.id,proforma_id:primo,data,importo:row.importo,fonte:row.tipo,
-            descrizione:(TIPI_CASH[row.tipo]||"Incasso")+(record?" (solo per record — notula già in pagato)":""),
+            descrizione:((TIPI_CASH[row.tipo]||"Incasso")+(nota?` — 📝 ${nota}`:"")+(record?" (solo per record)":"")).slice(0,300),
             mov_key:`CASH|${cliente.id}|${data}|${row.importo}|${row.tipo}|${Date.now()}|${ri}`};
           const ins=await sbInsert("pagamenti",[pag]); nuovi.push(ins[0]);
           if(record){ esiti.push(`${TIPI_CASH[row.tipo]||"Incasso"} ${fmt(row.importo)} SOLO PER RECORD`); continue; }
@@ -1508,10 +1521,10 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         const pfChosen = cashPf!=="auto" ? foglio.proforme.find(p=>p.id===cashPf) : null;
         setIncBusy(true);
         try{
-          const esito=await confermaIncassoMulti(rows,cli,pfChosen,soloRecord,cashData||todayStr(),cashMode==="riduzione");
+          const esito=await confermaIncassoMulti(rows,cli,pfChosen,soloRecord,cashData||todayStr(),cashMode==="riduzione",cashNota);
           const tot=rows.reduce((s,r)=>s+r.importo,0);
           setIncMsg(`✓ ${cli.nome}: ${fmt(tot)} registrato (${rows.length} rig${rows.length>1?"he":"a"})${esito?` · ${esito}`:" (nessuna proforma aperta abbinata)"}`);
-          setCashImp(""); setCashRows([]); setCashPf("auto"); setSoloRecord(false);
+          setCashImp(""); setCashRows([]); setCashPf("auto"); setSoloRecord(false); setCashNota("");
         }catch(e){ setIncMsg("Errore: "+e.message); }
         setIncBusy(false);
       };
@@ -2378,6 +2391,7 @@ In italiano, con numeri ed euro.`,
                       </div>
                       <input type="number" placeholder="Importo €" value={cashImp} onChange={e=>setCashImp(e.target.value)} style={{width:110,padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
                       <input type="date" value={cashData} onChange={e=>setCashData(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                      <input value={cashNota} onChange={e=>setCashNota(e.target.value)} placeholder="📝 Promemoria (es. rinnovo CNS, Fatture in Cloud...)" title="Nota libera salvata col pagamento e visibile nel Registro incassi" style={{width:250,padding:"7px 10px",borderRadius:8,border:`1px solid ${cashNota?S.warnD+"66":"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
                       <button onClick={()=>{ const v=parseFloat(cashImp); if(!(v>0)){ setIncMsg("⚠ Inserisci un importo prima di aggiungere la riga."); return; } setCashRows(r=>[...r,{tipo:cashTipo,importo:v}]); setCashImp(""); }} disabled={!cashCliObj} title="Aggiungi questa riga e inseriscine un'altra (es. contanti + sconto insieme)" style={{padding:"7px 10px",background:"var(--color-surface)",color:C.purple,border:`1px solid ${C.purple}44`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>＋ riga</button>
                       <button onClick={registraContanti} disabled={incBusy||!cashCliObj} style={{padding:"7px 14px",background:cashCliObj?S.good+"18":"var(--color-background-secondary)",color:cashCliObj?S.good:"var(--color-text-secondary)",border:`1px solid ${cashCliObj?S.good+"44":"var(--color-border-tertiary)"}`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>Registra{cashRows.length?` ${cashRows.length+(parseFloat(cashImp)>0?1:0)} righe`:""}</button>
                       {cashCliObj && <button onClick={()=>openClientPdfs(cashCliObj.nome)} title="Apri le proforma PDF del cliente da Yandex" style={{padding:"7px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-file-search"/> Proforme PDF</button>}
@@ -2455,6 +2469,7 @@ In italiano, con numeri ed euro.`,
                       <span style={{fontSize:13,fontWeight:600,color:S.good}}>{fmt(m.importo)}</span>
                       {m.cliente && <button onClick={()=>openClientPdfs(m.cliente.nome)} title="Apri le proforma PDF del cliente" style={{padding:"4px 7px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:6,fontSize:11,cursor:"pointer"}}>📄</button>}
                       {!done && m.cliente && <button onClick={()=>confermaMov(m,m.cliente,false)} disabled={incBusy} style={{padding:"4px 10px",background:S.good,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Conferma</button>}
+                      {!done && m.cliente && <button onClick={()=>{ const nota=prompt(`Promemoria per questo incasso di ${m.cliente.nome} (${fmt(m.importo)}):\nes. \"rinnovo CNS\", \"Fatture in Cloud 2026\", \"notula già in pagato\".\nVerrà registrato SOLO A REGISTRO, senza toccare il dovuto.`); if(nota===null) return; confermaMov({...m,soloRecord:true,nota},m.cliente,false); }} disabled={incBusy} title="Registra SOLO a registro con promemoria (non tocca le proforme): per rinnovi CNS, Fatture in Cloud, o notule già in pagato" style={{padding:"4px 8px",background:S.warnD+"14",color:S.warnD,border:`1px solid ${S.warnD}44`,borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>📝</button>}
                       {!done && m.cliente && <button onClick={()=>{ setIncMovs(prev=>prev.map(x=>x.key===m.key?{...x,cliente:null}:x)); setIncLink(v=>({...v,[m.key]:""})); }} disabled={incBusy} title="Abbinamento sbagliato? Scollega e scegli il cliente giusto (es. omonimi come i due Zanetti)" style={{padding:"4px 8px",background:"var(--color-background-secondary)",color:S.warnD,border:`1px solid ${S.warnD}44`,borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>🔁</button>}
                       {!done && !m.cliente && (<>
                         <input list="cash-cli-list" value={incLink[m.key]||""} onChange={e=>setIncLink(v=>({...v,[m.key]:e.target.value}))} placeholder="Cerca cliente..." style={{padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,width:170}}/>
@@ -2477,7 +2492,7 @@ In italiano, con numeri ed euro.`,
                     <div key={p.id} style={{borderTop:"0.5px solid var(--color-border-tertiary)"}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
                         <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank",sconto:"ti-discount"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
-                        <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span></span>
+                        <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span>{(p.descrizione||"").includes("📝")&&<span style={{fontSize:10,color:S.warnD,fontStyle:"italic"}} title={p.descrizione}> · {p.descrizione.slice(p.descrizione.indexOf("📝"),p.descrizione.indexOf("📝")+60)}</span>}{(p.descrizione||"").includes("solo per record")&&<span style={{fontSize:9,padding:"0 5px",borderRadius:5,background:S.warnD+"18",color:S.warnD,fontWeight:600,marginLeft:4}}>RECORD</span>}</span>
                         <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
                         {c && <button onClick={()=>openClientPdfs(c.nome)} title="Proforme PDF del cliente" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:6,padding:"2px 7px",color:C.purple,cursor:"pointer",fontSize:12}}>📄</button>}
                         <button onClick={()=>setEditPag(inEdit?null:{id:p.id,data:p.data||"",importo:p.importo,fonte:p.fonte,descrizione:p.descrizione||""})} title="Modifica pagamento" style={{background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"2px 7px",color:S.slateD,cursor:"pointer",fontSize:12}}>✏️</button>
