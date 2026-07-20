@@ -406,6 +406,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [cashData, setCashData]     = useState(()=>todayStr());
       const [cashTipo, setCashTipo]     = useState("contanti");   // contanti | pos | assegno | altro
       const [cashMode, setCashMode]     = useState("acconto");    // acconto | riduzione (se importo < proforma)
+      const [incPdfCli, setIncPdfCli]   = useState(null);         // nome cliente di cui mostrare i PDF in tab Incassi
+      const [editPag, setEditPag]       = useState(null);         // {id,data,importo,fonte,descrizione} pagamento in modifica
       const [foglioCat, setFoglioCat]   = useState("focus");
       const [foglioLoad, setFoglioLoad] = useState(false);
       const [foglioSeed, setFoglioSeed] = useState("idle");
@@ -1238,6 +1240,59 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           setFoglioMsg(aggiunti.length? `✓ Aggiunti ${aggiunti.length} clienti nuovi: ${aggiunti.join(", ")}` : "Nessun cliente nuovo: il Foglio è già allineato all'Excel.");
           setFoglioAlign("done");
         }catch(e){ setFoglioAlign("error"); setFoglioMsg("Errore allineamento: "+e.message); }
+      };
+
+      // ── PDF cliente dalla tab Incassi: trova la cartella Yandex dal nome ──
+      const findYdFolder = async(nomeCliente)=>{
+        const n=normName(nomeCliente); if(!n) return null;
+        // 1) dall'anagrafica cartelle già scansionata
+        const hit=(folderClients||[]).find(c=>{ const k=normName(c.name); return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); });
+        if(hit) return {name:hit.name, path:hit.path};
+        // 2) ricerca diretta su Yandex nella lettera iniziale (e rami categoria)
+        if(!ydToken) return null;
+        const lettera=(nomeCliente.trim()[0]||"").toUpperCase();
+        for(const base of ["/"+lettera,"/MENSILI","/RAGAZZI","/BILANCI"]){
+          try{ const d=await ydList(ydToken,base);
+            const f=(d._embedded?.items||[]).find(it=>{ if(it.type!=="dir") return false; const k=normName(it.name); return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); });
+            if(f) return {name:f.name, path:f.path};
+          }catch(e){}
+        }
+        return null;
+      };
+      const openClientPdfs = async(nomeCliente)=>{
+        setIncMsg("");
+        const f=await findYdFolder(nomeCliente);
+        if(!f){ setIncMsg(`⚠ Cartella Yandex non trovata per "${nomeCliente}" (token Yandex configurato?).`); return; }
+        setIncPdfCli(f.name);
+        if(!cliFiles[f.name]) loadClientFiles(f);
+      };
+
+      // ── Modifica / eliminazione pagamenti registrati ──
+      const salvaEditPag = async()=>{
+        if(!editPag) return;
+        try{
+          const patch={data:editPag.data||null,importo:parseFloat(editPag.importo)||0,fonte:editPag.fonte,descrizione:editPag.descrizione||""};
+          await sbUpdate("pagamenti",`id=eq.${editPag.id}`,patch);
+          setFoglio(f=>({...f,pagamenti:f.pagamenti.map(p=>p.id===editPag.id?{...p,...patch}:p)}));
+          setIncMsg("✓ Pagamento aggiornato. Nota: la modifica NON ricalcola le proforme già segnate (sistemale dal Foglio se serve).");
+          setEditPag(null);
+        }catch(e){ setIncMsg("Errore modifica: "+e.message); }
+      };
+      const eliminaPag = async(p)=>{
+        const c=foglio.clienti.find(x=>x.id===p.cliente_id);
+        if(!confirm(`Eliminare il pagamento di ${fmt(p.importo)} (${p.fonte}) di ${c?.nome||"?"} del ${p.data?fmtD(p.data):"—"}?`)) return;
+        try{
+          let riaperta="";
+          const prof=p.proforma_id ? foglio.proforme.find(x=>x.id===p.proforma_id) : null;
+          if(prof && prof.pagato && confirm(`Riaprire anche la proforma collegata (${PLABEL[prof.periodo]||prof.periodo} · ${fmt(prof.importo)})?\nOK = torna DA PAGARE · Annulla = resta pagata`)){
+            await sbUpdate("proforme",`id=eq.${prof.id}`,{pagato:false,data_pagamento:null});
+            setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===prof.id?{...x,pagato:false,data_pagamento:null}:x)}));
+            riaperta=` · proforma ${PLABEL[prof.periodo]||prof.periodo} riaperta`;
+          }
+          await sbDelete("pagamenti",`id=eq.${p.id}`);
+          setFoglio(f=>({...f,pagamenti:f.pagamenti.filter(x=>x.id!==p.id)}));
+          setIncMsg(`✓ Pagamento eliminato${riaperta}.`);
+        }catch(e){ setIncMsg("Errore eliminazione: "+e.message); }
       };
 
       // ── INCASSI: estratto conto BPER + contanti ──
@@ -2211,6 +2266,7 @@ In italiano, con numeri ed euro.`,
                       <input type="number" placeholder="Importo €" value={cashImp} onChange={e=>setCashImp(e.target.value)} style={{width:110,padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
                       <input type="date" value={cashData} onChange={e=>setCashData(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
                       <button onClick={registraContanti} disabled={incBusy||!cashCliObj} style={{padding:"7px 14px",background:cashCliObj?S.good+"18":"var(--color-background-secondary)",color:cashCliObj?S.good:"var(--color-text-secondary)",border:`1px solid ${cashCliObj?S.good+"44":"var(--color-border-tertiary)"}`,borderRadius:8,fontSize:12,fontWeight:600,cursor:cashCliObj?"pointer":"not-allowed"}}>Registra</button>
+                      {cashCliObj && <button onClick={()=>openClientPdfs(cashCliObj.nome)} title="Apri le proforma PDF del cliente da Yandex" style={{padding:"7px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-file-search"/> Proforme PDF</button>}
                     </div>
                     {cashCliObj && (
                       <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:8}}>
@@ -2255,6 +2311,7 @@ In italiano, con numeri ed euro.`,
                         <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{m.data||"—"}{m.dup?" · già registrato":m.escl?" · escluso (non CED)":m.state==="done"?` · ✓ registrato${m.pfInfo?" · "+m.pfInfo:""}`:m.cliente?` · → ${m.cliente.nome}`:" · nessun abbinamento"}</p>
                       </div>
                       <span style={{fontSize:13,fontWeight:600,color:S.good}}>{fmt(m.importo)}</span>
+                      {m.cliente && <button onClick={()=>openClientPdfs(m.cliente.nome)} title="Apri le proforma PDF del cliente" style={{padding:"4px 7px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:6,fontSize:11,cursor:"pointer"}}><i className="ti ti-file-search"/></button>}
                       {!done && m.cliente && <button onClick={()=>confermaMov(m,m.cliente,false)} disabled={incBusy} style={{padding:"4px 10px",background:S.good,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Conferma</button>}
                       {!done && !m.cliente && (
                         <select defaultValue="" onChange={e=>{ const c=foglio.clienti.find(x=>x.id===e.target.value); if(c) confermaMov(m,c,true); }} disabled={incBusy} style={{padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,maxWidth:190}}>
@@ -2268,18 +2325,62 @@ In italiano, con numeri ed euro.`,
                 </div>
               )}
 
-              {/* Registro incassi dal cloud */}
+              {/* Pannello PDF cliente (proforme da Yandex) */}
+              {incPdfCli && (()=>{ const cf=cliFiles[incPdfCli]; return (
+                <div style={{background:"var(--color-surface)",border:`1px solid ${C.purple}44`,borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginBottom:12}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <p style={{margin:0,fontSize:13,fontWeight:600,color:C.purple}}><i className="ti ti-file-search"/> Proforme di {incPdfCli}</p>
+                    <button onClick={()=>setIncPdfCli(null)} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer"}}><i className="ti ti-x"/></button>
+                  </div>
+                  {!cf||cf.loading ? <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Carico l'elenco da Yandex...</p> : (<>
+                    {cf.error && <p style={{fontSize:12,color:C.red}}>Errore: {cf.error}</p>}
+                    {cf.open.length>0 && <p style={{margin:"4px 0 2px",fontSize:11,fontWeight:600,color:S.warn}}>DA PAGARE ({cf.open.length})</p>}
+                    {cf.open.map((f,i)=>(
+                      <button key={"o"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-primary)"}}>
+                        <i className="ti ti-file-type-pdf" style={{color:C.purple}}/>{f.name}
+                      </button>
+                    ))}
+                    {cf.paid.length>0 && <p style={{margin:"8px 0 2px",fontSize:11,fontWeight:600,color:S.good}}>PAGATE ({cf.paid.length})</p>}
+                    {cf.paid.map((f,i)=>(
+                      <button key={"p"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>
+                        <i className="ti ti-file-check" style={{color:S.good}}/>{f.name}
+                      </button>
+                    ))}
+                    {!cf.error && cf.open.length===0 && cf.paid.length===0 && <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Nessun PDF nella cartella.</p>}
+                  </>)}
+                  {pdfLoading && <p style={{margin:"6px 0 0",fontSize:11,color:C.purple}}><i className="ti ti-loader-2"/> Apro il PDF nel viewer...</p>}
+                </div>
+              );})()}
+
+              {/* Registro incassi dal cloud (con modifica/eliminazione) */}
               {(foglio.pagamenti||[]).length>0 && (
                 <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                     <p style={{margin:0,fontSize:13,fontWeight:600}}>Registro incassi ({foglio.pagamenti.length})</p>
                     <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.reduce((s,p)=>s+(Number(p.importo)||0),0))}</span>
                   </div>
-                  {foglio.pagamenti.slice(0,50).map(p=>{ const c=foglio.clienti.find(x=>x.id===p.cliente_id); return (
-                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
-                      <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
-                      <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span></span>
-                      <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
+                  {foglio.pagamenti.slice(0,50).map(p=>{ const c=foglio.clienti.find(x=>x.id===p.cliente_id); const inEdit=editPag?.id===p.id; return (
+                    <div key={p.id} style={{borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
+                        <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
+                        <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span></span>
+                        <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
+                        {c && <button onClick={()=>openClientPdfs(c.nome)} title="Proforme PDF del cliente" style={{background:"none",border:"none",color:C.purple,cursor:"pointer",fontSize:13}}><i className="ti ti-file-search"/></button>}
+                        <button onClick={()=>setEditPag(inEdit?null:{id:p.id,data:p.data||"",importo:p.importo,fonte:p.fonte,descrizione:p.descrizione||""})} title="Modifica pagamento" style={{background:"none",border:"none",color:S.slateD,cursor:"pointer",fontSize:13}}><i className="ti ti-pencil"/></button>
+                        <button onClick={()=>eliminaPag(p)} title="Elimina pagamento" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,opacity:.6}}><i className="ti ti-trash"/></button>
+                      </div>
+                      {inEdit && (
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",padding:"4px 0 10px 20px"}}>
+                          <input type="date" value={editPag.data} onChange={e=>setEditPag(s=>({...s,data:e.target.value}))} style={{padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}/>
+                          <input type="number" value={editPag.importo} onChange={e=>setEditPag(s=>({...s,importo:e.target.value}))} style={{width:90,padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/>
+                          <select value={editPag.fonte} onChange={e=>setEditPag(s=>({...s,fonte:e.target.value}))} style={{padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}>
+                            <option value="contanti">Contanti</option><option value="pos">POS</option><option value="assegno">Assegno</option><option value="estratto">Bonifico</option><option value="altro">Altro</option>
+                          </select>
+                          <input value={editPag.descrizione} onChange={e=>setEditPag(s=>({...s,descrizione:e.target.value}))} placeholder="Descrizione" style={{flex:1,minWidth:120,padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}/>
+                          <button onClick={salvaEditPag} style={{padding:"5px 12px",background:S.good,color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:600,cursor:"pointer"}}>Salva</button>
+                          <button onClick={()=>setEditPag(null)} style={{padding:"5px 10px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:7,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)"}}>Annulla</button>
+                        </div>
+                      )}
                     </div>
                   );})}
                 </div>
