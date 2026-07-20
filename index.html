@@ -1287,7 +1287,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const openClientPdfs = async(nomeCliente)=>{
         setIncMsg("");
         const f=await findYdFolder(nomeCliente);
-        if(!f){ setIncMsg(`⚠ Cartella Yandex non trovata per "${nomeCliente}" (token Yandex configurato?).`); return; }
+        if(!f){ const msg=`⚠ Cartella Yandex non trovata per "${nomeCliente}" (token Yandex configurato?).`; setIncMsg(msg); if(tab!=="incassi") alert(msg); return; }
         setIncPdfCli(f.name);
         if(!cliFiles[f.name]) loadClientFiles(f);
       };
@@ -1977,8 +1977,8 @@ In italiano, con numeri ed euro.`,
                               {pdfLoading?<><i className="ti ti-loader-2"/> Carico...</>:<><i className="ti ti-eye"/> Visualizza PDF</>}
                             </button>
                           )}
-                          <button onClick={e=>{e.stopPropagation();setTab("yandex");}} style={{padding:"6px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-                            <i className="ti ti-cloud"/> Da Yandex
+                          <button onClick={e=>{e.stopPropagation();openClientPdfs(inv.client);}} title="Apre la cartella Yandex del cliente con riepilogo della sua situazione" style={{padding:"6px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
+                            📂 Cartella cliente
                           </button>
                         </div>
                         {showPay && selected?.id===inv.id && (
@@ -2442,37 +2442,6 @@ In italiano, con numeri ed euro.`,
                   })}
                 </div>
               )}
-
-              {/* Pannello PDF cliente (proforme da Yandex) */}
-              {incPdfCli && (()=>{ const cf=cliFiles[incPdfCli]; return (
-                <div style={{background:"var(--color-surface)",border:`1px solid ${C.purple}44`,borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginBottom:12}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                    <p style={{margin:0,fontSize:13,fontWeight:600,color:C.purple}}><i className="ti ti-file-search"/> Proforme di {incPdfCli}</p>
-                    <button onClick={()=>setIncPdfCli(null)} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer"}}><i className="ti ti-x"/></button>
-                  </div>
-                  {!cf||cf.loading ? <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Carico l'elenco da Yandex...</p> : (<>
-                    {cf.error && <p style={{fontSize:12,color:C.red}}>Errore: {cf.error}</p>}
-                    {cf.open.length>0 && <p style={{margin:"4px 0 2px",fontSize:11,fontWeight:600,color:S.warn}}>DA PAGARE ({cf.open.length})</p>}
-                    {cf.open.map((f,i)=>(
-                      <button key={"o"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-primary)"}}>
-                        <span style={{color:C.purple}}>📄</span>
-                        <span style={{minWidth:74,fontWeight:600,color:S.slateD}}>{pdfEmissDate(f)?fmtD(pdfEmissDate(f)):"—"}</span>
-                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span>
-                      </button>
-                    ))}
-                    {cf.paid.length>0 && <p style={{margin:"8px 0 2px",fontSize:11,fontWeight:600,color:S.good}}>PAGATE ({cf.paid.length})</p>}
-                    {cf.paid.map((f,i)=>(
-                      <button key={"p"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>
-                        <span style={{color:S.good}}>✅</span>
-                        <span style={{minWidth:74,fontWeight:600,color:S.good}}>{pdfEmissDate(f)?fmtD(pdfEmissDate(f)):"—"}</span>
-                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span>
-                      </button>
-                    ))}
-                    {!cf.error && cf.open.length===0 && cf.paid.length===0 && <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Nessun PDF nella cartella.</p>}
-                  </>)}
-                  {pdfLoading && <p style={{margin:"6px 0 0",fontSize:11,color:C.purple}}><i className="ti ti-loader-2"/> Apro il PDF nel viewer...</p>}
-                </div>
-              );})()}
 
               {/* Registro incassi dal cloud (con modifica/eliminazione) */}
               {(foglio.pagamenti||[]).length>0 && (
@@ -2950,6 +2919,88 @@ In italiano, con numeri ed euro.`,
           )}
 
           {/* ══ PDF VIEWER ══ */}
+          {/* Scheda cliente globale: riepilogo situazione + PDF Yandex (apribile da qualsiasi tab) */}
+          {incPdfCli && (()=>{
+            const cf=cliFiles[incPdfCli];
+            const nomeUp=incPdfCli.trim().toUpperCase();
+            const cliObj = foglio.clienti.find(c=>c.nome.trim().toUpperCase()===nomeUp)
+              || foglio.clienti.find(c=>{const n=c.nome.trim().toUpperCase(); return n.includes(nomeUp)||nomeUp.includes(n);});
+            const pfs = cliObj ? foglio.proforme.filter(p=>p.cliente_id===cliObj.id) : [];
+            const aperte = pfs.filter(p=>!p.pagato && Number(p.importo)>0)
+              .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")));
+            const pagate = pfs.filter(p=>p.pagato).sort((a,b)=>String(b.data_pagamento||"").localeCompare(String(a.data_pagamento||"")));
+            const oggi = todayStr();
+            const scadEff = p => p.scadenza || PERIOD_DEADLINE[p.periodo] || "";
+            const dovuto = aperte.reduce((s,p)=>s+(Number(p.importo)||0),0);
+            const scaduto = aperte.filter(p=>scadEff(p) && scadEff(p)<oggi).reduce((s,p)=>s+(Number(p.importo)||0),0);
+            const pags = cliObj ? (foglio.pagamenti||[]).filter(p=>p.cliente_id===cliObj.id).slice(0,5) : [];
+            return (
+            <div onClick={()=>setIncPdfCli(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.45)",zIndex:200,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 16px",overflowY:"auto"}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:"var(--color-surface)",border:`1px solid ${C.purple}44`,borderRadius:14,padding:"14px 16px",boxShadow:"0 12px 40px rgba(0,0,0,.25)",width:"100%",maxWidth:760,maxHeight:"85vh",overflowY:"auto"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <p style={{margin:0,fontSize:14,fontWeight:700,color:C.purple}}>📂 {incPdfCli}</p>
+                  <button onClick={()=>setIncPdfCli(null)} style={{background:"var(--color-background-secondary)",border:"none",borderRadius:7,padding:"4px 10px",color:"var(--color-text-primary)",cursor:"pointer",fontSize:13,fontWeight:600}}>✕ Chiudi</button>
+                </div>
+                {cliObj ? (<>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+                    <div style={{flex:"1 1 120px",padding:"8px 12px",borderRadius:10,background:S.warn+"12",border:`1px solid ${S.warn}33`}}>
+                      <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>DA INCASSARE</p>
+                      <p style={{margin:0,fontSize:16,fontWeight:700,color:S.warnD}}>{fmt(dovuto)}</p>
+                    </div>
+                    <div style={{flex:"1 1 120px",padding:"8px 12px",borderRadius:10,background:C.red+"10",border:`1px solid ${C.red}33`}}>
+                      <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>DI CUI SCADUTO</p>
+                      <p style={{margin:0,fontSize:16,fontWeight:700,color:C.red}}>{fmt(scaduto)}</p>
+                    </div>
+                    <div style={{flex:"1 1 120px",padding:"8px 12px",borderRadius:10,background:S.good+"12",border:`1px solid ${S.good}33`}}>
+                      <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>PROFORME</p>
+                      <p style={{margin:0,fontSize:16,fontWeight:700,color:S.good}}>{aperte.length} aperte · {pagate.length} pagate</p>
+                    </div>
+                  </div>
+                  {pfs.length>0 && (
+                    <div style={{marginBottom:10,border:"0.5px solid var(--color-border-tertiary)",borderRadius:10,overflow:"hidden"}}>
+                      {[...aperte,...pagate].map(p=>{ const sc=scadEff(p); const isScad=!p.pagato && sc && sc<oggi; return (
+                        <div key={p.id} style={{display:"flex",gap:8,alignItems:"center",padding:"5px 10px",borderTop:"0.5px solid var(--color-border-tertiary)",fontSize:12,background:p.pagato?"transparent":(isScad?C.red+"08":S.warn+"08")}}>
+                          <span style={{minWidth:16}}>{p.pagato?"✅":(isScad?"🔴":"🟡")}</span>
+                          <span style={{minWidth:60,fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
+                          <span style={{minWidth:80,fontWeight:600,color:p.pagato?S.good:(isScad?C.red:S.warnD)}}>{fmt(p.importo)}</span>
+                          <span style={{minWidth:120,fontSize:11,color:"var(--color-text-secondary)"}}>{p.pagato?`pagata ${p.data_pagamento?fmtD(p.data_pagamento):""}`:(sc?`scad. ${fmtD(sc)}`:"")}</span>
+                          {p.note && <span style={{flex:1,fontSize:10,fontStyle:"italic",color:S.warnD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p.note}>📌 {p.note}</span>}
+                        </div>
+                      );})}
+                    </div>
+                  )}
+                  {pags.length>0 && (
+                    <div style={{marginBottom:10,fontSize:11,color:"var(--color-text-secondary)"}}>
+                      <b>Ultimi incassi:</b> {pags.map(p=>`${fmtD(p.data)} ${fmt(p.importo)} (${p.fonte||"—"})`).join(" · ")}
+                    </div>
+                  )}
+                </>) : <p style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:0}}>Cliente non presente nel Foglio cloud — mostro solo i PDF della cartella Yandex.</p>}
+                <p style={{margin:"0 0 4px",fontSize:12,fontWeight:700,color:C.purple}}>Documenti in cartella Yandex</p>
+                {!cf||cf.loading ? <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Carico l'elenco da Yandex...</p> : (<>
+                  {cf.error && <p style={{fontSize:12,color:C.red}}>Errore: {cf.error}</p>}
+                  {cf.open.length>0 && <p style={{margin:"4px 0 2px",fontSize:11,fontWeight:600,color:S.warn}}>DA PAGARE ({cf.open.length})</p>}
+                  {cf.open.map((f,i)=>(
+                    <button key={"o"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-primary)"}}>
+                      <span style={{color:C.purple}}>📄</span>
+                      <span style={{minWidth:74,fontWeight:600,color:S.slateD}}>{pdfEmissDate(f)?fmtD(pdfEmissDate(f)):"—"}</span>
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span>
+                    </button>
+                  ))}
+                  {cf.paid.length>0 && <p style={{margin:"8px 0 2px",fontSize:11,fontWeight:600,color:S.good}}>PAGATE ({cf.paid.length})</p>}
+                  {cf.paid.map((f,i)=>(
+                    <button key={"p"+i} onClick={()=>viewYdFile(f,incPdfCli)} disabled={pdfLoading} style={{display:"flex",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"5px 8px",background:"transparent",border:"none",borderTop:"0.5px solid var(--color-border-tertiary)",cursor:"pointer",fontSize:12,color:"var(--color-text-secondary)"}}>
+                      <span style={{color:S.good}}>✅</span>
+                      <span style={{minWidth:74,fontWeight:600,color:S.good}}>{pdfEmissDate(f)?fmtD(pdfEmissDate(f)):"—"}</span>
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span>
+                    </button>
+                  ))}
+                  {!cf.error && cf.open.length===0 && cf.paid.length===0 && <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Nessun PDF nella cartella.</p>}
+                </>)}
+                {pdfLoading && <p style={{margin:"6px 0 0",fontSize:11,color:C.purple}}>⏳ Apro il PDF nel viewer...</p>}
+              </div>
+            </div>
+            );})()}
+
           {tab==="viewer" && viewerInv && blobMap[viewerInv.id] && (
             <div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
