@@ -397,6 +397,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [foglio, setFoglio]         = useState({clienti:[],proforme:[],pagamenti:[],alias:[]});
       // Incassi (estratto conto + contanti)
       const [incMovs, setIncMovs]       = useState([]);
+      const [incLink, setIncLink]       = useState({});
       const [incMsg, setIncMsg]         = useState("");
       const [incBusy, setIncBusy]       = useState(false);
       const [incDaData, setIncDaData]   = useState(()=>LS.raw("ced_inc_dadata")||"");
@@ -1323,12 +1324,30 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       // ── INCASSI: estratto conto BPER + contanti ──
       const ITMESI={gennaio:0,febbraio:1,marzo:2,aprile:3,maggio:4,giugno:5,luglio:6,agosto:7,settembre:8,ottobre:9,novembre:10,dicembre:11};
       const parseItDate = s => { const m=String(s).trim().match(/(\d{1,2})\s+([a-zà]+)\s+(\d{4})/i); if(!m) return null; const mm=ITMESI[m[2].toLowerCase()]; if(mm==null) return null; return `${m[3]}-${String(mm+1).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`; };
+      // Nome "core": senza forme societarie e congiunzioni, per matchare
+      // es. "ASIF TRASPORTI DI NAWAZ MUHAMMAD" con "ASIF TRASPORTI NAWAZ"
+      const normCore = s => String(s||"").toUpperCase().replace(/[^A-Z ]+/g," ")
+        .replace(/\b(DI|DEL|DELLA|DELLE|DEI|E|C|CO|SRL|SRLS|SNC|SAS|SS|SPA|SOCIETA|DITTA|IMPRESA|FRATELLI|F\.?LLI)\b/g," ")
+        .replace(/\s+/g,"");
       const matchClienteBanca = (nome) => {
         const n=normName(nome); if(!n) return null;
-        const al=(foglio.alias||[]).find(a=>normName(a.testo_banca)===n);
+        const al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca); return t===n || (t.length>6&&n.includes(t)) || (n.length>6&&t.includes(n)); });
         if(al){ const c=foglio.clienti.find(x=>x.id===al.cliente_id); if(c) return c; }
+        const nc=normCore(nome);
         return foglio.clienti.find(c=>{ const k=normName(c.nome); if(!k) return false;
-          return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); })||null;
+          if(k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k))) return true;
+          const kc=normCore(c.nome); if(!kc||!nc) return false;
+          return kc===nc || (kc.length>7&&nc.startsWith(kc)) || (nc.length>7&&kc.startsWith(nc)); })||null;
+      };
+      // Collega un movimento a un cliente SENZA registrare il pagamento:
+      // memorizza l'alias banca->cliente e abbina la riga (poi si conferma normalmente)
+      const collegaMov = async(mov, cliente)=>{
+        const testo=(mov.nome||mov.desc||"").slice(0,120);
+        try{ await sbInsert("alias_banca",[{testo_banca:testo,cliente_id:cliente.id}]);
+          setFoglio(f=>({...f,alias:[...(f.alias||[]),{testo_banca:testo,cliente_id:cliente.id}]}));
+        }catch(e){}
+        setIncMovs(prev=>prev.map(x=>x.key===mov.key?{...x,cliente}:x));
+        setIncMsg(`🔗 "${(mov.nome||mov.desc||"").slice(0,40)}" collegato a ${cliente.nome} e memorizzato per il futuro. Controlla la riga e premi Conferma.`);
       };
       const caricaEstratto = async(file)=>{
         if(!sbReady()){ setIncMsg("⚠ Connetti prima Supabase (tab Foglio)."); return; }
@@ -2431,12 +2450,10 @@ In italiano, con numeri ed euro.`,
                       <span style={{fontSize:13,fontWeight:600,color:S.good}}>{fmt(m.importo)}</span>
                       {m.cliente && <button onClick={()=>openClientPdfs(m.cliente.nome)} title="Apri le proforma PDF del cliente" style={{padding:"4px 7px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:6,fontSize:11,cursor:"pointer"}}>📄</button>}
                       {!done && m.cliente && <button onClick={()=>confermaMov(m,m.cliente,false)} disabled={incBusy} style={{padding:"4px 10px",background:S.good,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Conferma</button>}
-                      {!done && !m.cliente && (
-                        <select defaultValue="" onChange={e=>{ const c=foglio.clienti.find(x=>x.id===e.target.value); if(c) confermaMov(m,c,true); }} disabled={incBusy} style={{padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,maxWidth:190}}>
-                          <option value="">Abbina a cliente...</option>
-                          {[...foglio.clienti].sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
-                        </select>
-                      )}
+                      {!done && !m.cliente && (<>
+                        <input list="cash-cli-list" value={incLink[m.key]||""} onChange={e=>setIncLink(v=>({...v,[m.key]:e.target.value}))} placeholder="Cerca cliente..." style={{padding:"5px 8px",borderRadius:6,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,width:170}}/>
+                        <button onClick={()=>{ const c=foglio.clienti.find(x=>x.nome===(incLink[m.key]||"").trim()); if(!c){ setIncMsg("⚠ Scrivi il nome e selezionalo dall'elenco, poi premi 🔗 Collega."); return; } collegaMov(m,c); }} disabled={incBusy} title="Collega questo nome banca al cliente (memorizzato per i prossimi estratti) SENZA registrare il pagamento" style={{padding:"4px 9px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}44`,borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>🔗 Collega</button>
+                      </>)}
                     </div>
                     );
                   })}
