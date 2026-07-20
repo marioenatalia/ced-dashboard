@@ -1024,7 +1024,15 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       // Inserisce/aggiorna una proforma nel Foglio usando una cache clienti locale (evita duplicati nei loop)
       const _pushRecoRow = async(row, clientiCache, proformeCache)=>{
         const [per,catSug]=recoPeriodMap(row);
-        let cli=clientiCache.find(c=>{ const a=normName(c.nome),b=normName(row.cliente); return a&&b&&(a===b||a.startsWith(b.slice(0,6))||b.startsWith(a.slice(0,6))); });
+        // 1) alias banca (collegamenti espliciti 🔗) → 2) match esatto su nome AI o cartella → 3) prefisso
+        const nb=normName(row.cliente), nf=normName(row.folder);
+        let cli=null;
+        const al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca); if(!t) return false;
+          return t===nb||t===nf||(t.length>6&&(nb.includes(t)||nf.includes(t)))||(nb.length>6&&t.includes(nb))||(nf.length>6&&t.includes(nf)); });
+        if(al) cli=clientiCache.find(c=>c.id===al.cliente_id)||null;
+        if(!cli) cli=clientiCache.find(c=>{ const a=normName(c.nome); return a&&(a===nb||a===nf); });
+        if(!cli) cli=clientiCache.find(c=>{ const a=normName(c.nome); return a&&nb&&(a.startsWith(nb.slice(0,6))||nb.startsWith(a.slice(0,6))); });
+        if(!cli) cli=clientiCache.find(c=>{ const a=normName(c.nome); return a&&nf&&(a.startsWith(nf.slice(0,6))||nf.startsWith(a.slice(0,6))); });
         if(!cli){ const ins=await sbInsert("clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; clientiCache.push(cli); }
         const patch={importo:row.totale||0,pagato:!!row.paid,pdf_path:row.file||null,data_emissione:row.data||null};
         const ex=proformeCache.find(p=>p.cliente_id===cli.id && p.periodo===per && p.anno===2026);
