@@ -408,6 +408,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [foglioCat, setFoglioCat]   = useState("focus");
       const [foglioLoad, setFoglioLoad] = useState(false);
       const [foglioSeed, setFoglioSeed] = useState("idle");
+      const [foglioAlign, setFoglioAlign] = useState("idle");
       const [foglioMsg, setFoglioMsg]   = useState("");
 
       const _today = new Date(); _today.setHours(0,0,0,0);
@@ -1200,6 +1201,44 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         }catch(e){ setFoglioSeed("error"); setFoglioMsg("Errore seed: "+e.message); }
       };
 
+      // ── ALLINEA NUOVI: aggiunge SOLO i clienti dell'Excel non ancora nel Foglio ──
+      // Non tocca clienti/proforme/pagamenti esistenti (sicuro da usare in qualsiasi momento).
+      const allineaNuovi = async(file)=>{
+        if(!sbReady()){ setFoglioMsg("Configura prima Supabase."); return; }
+        if(!window.XLSX){ setFoglioMsg("Libreria Excel non caricata, riprova."); return; }
+        setFoglioAlign("running"); setFoglioMsg("Confronto Excel ↔ Foglio in corso...");
+        try{
+          const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{type:"array"});
+          const grid=n=>{ const ws=wb.Sheets[n]; return ws?XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""}):[]; };
+          const dbNorm = foglio.clienti.map(c=>normName(c.nome)).filter(Boolean);
+          const esiste = nm => { const n=normName(nm); if(!n) return true;
+            return dbNorm.some(k=> k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k))); };
+          const bilset=new Set();
+          (grid("BILANCIO")||[]).slice(1).forEach(r=>{ const nm=String(r[0]||"").trim(); if(nm.length<2) return; const fl=r.slice(1).join(" ").toUpperCase(); if(!fl.includes("PAGAT")&&!fl.includes("DEPOSIT")) bilset.add(normName(nm)); });
+          const hasBil=nm=>{ const n=normName(nm); return [...bilset].some(b=>b===n||b.startsWith(n.slice(0,6))||n.startsWith(b.slice(0,6))); };
+          const aggiunti=[];
+          const pushNew = async(nome,cat,arr,note,inact,periods)=>{
+            if(esiste(nome)) return;
+            const ins=await sbInsert("clienti",[{nome,categoria:cat,arretrati:arr||0,tariffa:note||"",stato:inact?"uscito":"attivo"}]);
+            const cid=ins[0].id; const rows=[];
+            for(const [per,imp,pg] of periods){ if(imp>0||pg) rows.push({cliente_id:cid,anno:2026,periodo:per,importo:imp||0,pagato:!!pg}); }
+            if(cat==="focus"&&hasBil(nome)) rows.push({cliente_id:cid,anno:2026,periodo:"BILANCIO",importo:600,pagato:false});
+            if(rows.length) await sbInsert("proforme",rows);
+            aggiunti.push(nome); dbNorm.push(normName(nome));
+          };
+          for(const r of (grid("FOCUS")||[]).slice(1)){ const nm=String(r[1]||"").trim(); if(nm.length<3)continue; const note=String(r[7]||"").trim(); const cells=[r[2],r[3],r[4],r[5],r[6]]; const inact=isInact(note)||cells.some(isInact);
+            await pushNew(nm,"focus",xlsNum(r[2]),note,inact,[["I",isPag(r[3])?0:xlsNum(r[3]),isPag(r[3])],["II",isPag(r[4])?0:xlsNum(r[4]),isPag(r[4])],["III",isPag(r[5])?0:xlsNum(r[5]),isPag(r[5])],["IV",isPag(r[6])?0:xlsNum(r[6]),isPag(r[6])]]); }
+          const MCal=PERIODI.altri;
+          for(const r of (grid("ALTRI")||[]).slice(1)){ const nm=String(r[1]||"").trim(); if(nm.length<3||["MENSILI","BIMESTRALE"].includes(nm.toUpperCase()))continue; const pr=[]; for(let i=0;i<MCal.length;i++){const v=r[4+i];if(v===undefined)break;pr.push([MCal[i],isPag(v)?0:xlsNum(v),isPag(v)]);} await pushNew(nm,"altri",xlsNum(r[3]),String(r[2]||"").trim(),isInact(String(r[2]||"")),pr); }
+          for(const r of (grid("RAGAZZI")||[]).slice(1)){ const a=String(r[1]||"").trim(); if(a.length>2) await pushNew(a,"ragazzi",0,"semestre",false,[["I_SEM",isPag(r[2])?0:xlsNum(r[2]),isPag(r[2])],["II_SEM",isPag(r[3])?0:xlsNum(r[3]),isPag(r[3])]]); const b=String(r[5]||"").trim(); if(b.length>2) await pushNew(b,"ragazzi",0,"annuale",false,[["ANNO",xlsNum(r[4]),false]]); }
+          for(const r of (grid("BILANCIO")||[]).slice(1)){ const nm=String(r[0]||"").trim(); if(nm.length<2)continue; const fl=r.slice(1).join(" ").toUpperCase(); await pushNew(nm,"bilancio",0,"",false,[["BILANCIO",600,fl.includes("PAGAT")||fl.includes("DEPOSIT")]]); }
+          for(const r of (grid("nuovi")||[]).slice(1)){ const nm=String(r[0]||"").trim(); if(nm.length<3||nm.toUpperCase().includes("NUOVI"))continue; await pushNew(nm,"nuovi",0,"",false,[]); }
+          await loadFoglio();
+          setFoglioMsg(aggiunti.length? `✓ Aggiunti ${aggiunti.length} clienti nuovi: ${aggiunti.join(", ")}` : "Nessun cliente nuovo: il Foglio è già allineato all'Excel.");
+          setFoglioAlign("done");
+        }catch(e){ setFoglioAlign("error"); setFoglioMsg("Errore allineamento: "+e.message); }
+      };
+
       // ── INCASSI: estratto conto BPER + contanti ──
       const ITMESI={gennaio:0,febbraio:1,marzo:2,aprile:3,maggio:4,giugno:5,luglio:6,agosto:7,settembre:8,ottobre:9,novembre:10,dicembre:11};
       const parseItDate = s => { const m=String(s).trim().match(/(\d{1,2})\s+([a-zà]+)\s+(\d{4})/i); if(!m) return null; const mm=ITMESI[m[2].toLowerCase()]; if(mm==null) return null; return `${m[3]}-${String(mm+1).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`; };
@@ -1986,8 +2025,12 @@ In italiano, con numeri ed euro.`,
                 <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
                   <button onClick={loadFoglio} disabled={foglioLoad} style={{padding:"8px 14px",background:S.slateD,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><i className={`ti ti-refresh ${foglioLoad?"ti-spin":""}`}/>{foglioLoad?"Carico...":"Ricarica"}</button>
                   <button onClick={addCliente} style={{padding:"8px 14px",background:S.good+"18",color:S.good,border:`1px solid ${S.good}44`,borderRadius:8,fontSize:12,fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}><i className="ti ti-user-plus"/> Cliente</button>
-                  <label style={{padding:"8px 14px",background:"transparent",border:`1px solid ${S.slateD}55`,color:S.slateD,borderRadius:8,fontSize:12,fontWeight:500,cursor:foglioSeed==="running"?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:5}}>
-                    <i className={`ti ${foglioSeed==="running"?"ti-loader-2 ti-spin":"ti-database-import"}`}/>{foglioSeed==="running"?"Importo...":"Importa da Excel"}
+                  <label style={{padding:"8px 14px",background:foglioAlign==="running"?C.grayL:S.good,color:"#fff",borderRadius:8,fontSize:12,fontWeight:600,cursor:foglioAlign==="running"?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:5}} title="Aggiunge SOLO i clienti dell'Excel non ancora presenti, senza toccare dati e pagamenti esistenti">
+                    <i className={`ti ${foglioAlign==="running"?"ti-loader-2 ti-spin":"ti-user-plus"}`}/>{foglioAlign==="running"?"Allineo...":"Allinea nuovi da Excel"}
+                    <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) allineaNuovi(f); e.target.value="";}}/>
+                  </label>
+                  <label style={{padding:"8px 14px",background:"transparent",border:`1px solid ${S.slateD}55`,color:S.slateD,borderRadius:8,fontSize:12,fontWeight:500,cursor:foglioSeed==="running"?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:5}} title="ATTENZIONE: sostituisce TUTTI i dati del Foglio con l'Excel (usare solo per ripartire da zero)">
+                    <i className={`ti ${foglioSeed==="running"?"ti-loader-2 ti-spin":"ti-database-import"}`}/>{foglioSeed==="running"?"Importo...":"Reimporta tutto"}
                     <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) seedFoglio(f); e.target.value="";}}/>
                   </label>
                   <button onClick={()=>{ localStorage.removeItem("ced_sb_url"); localStorage.removeItem("ced_sb_key"); setSbUrl(""); setSbKey(""); setFoglio({clienti:[],proforme:[]}); }} style={{marginLeft:"auto",padding:"8px 12px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)"}}>Disconnetti</button>
