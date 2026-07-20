@@ -396,8 +396,10 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [sbKey, setSbKey]           = useState(()=>localStorage.getItem("ced_sb_key")||"");
       const [foglio, setFoglio]         = useState({clienti:[],proforme:[],pagamenti:[],alias:[]});
       // Incassi (estratto conto + contanti)
-      const [incMovs, setIncMovs]       = useState([]);
+      const [incMovs, setIncMovs]       = useState(()=>LS.get("ced_inc_movs",[]));
       const [incLink, setIncLink]       = useState({});
+      // La lista dell'estratto sopravvive ai refresh della pagina (Ctrl+Shift+R)
+      useEffect(()=>{ LS.set("ced_inc_movs", incMovs); },[incMovs]);
       const [incMsg, setIncMsg]         = useState("");
       const [incBusy, setIncBusy]       = useState(false);
       const [incDaData, setIncDaData]   = useState(()=>LS.raw("ced_inc_dadata")||"");
@@ -2341,6 +2343,9 @@ In italiano, con numeri ed euro.`,
                   <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Solo movimenti dal:</span>
                   <input type="date" value={incDaData} onChange={e=>setIncDaData(e.target.value)} title="Ignora i movimenti precedenti a questa data (es. già registrati nell'Excel)" style={{padding:"7px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
                   {incDaData && <button onClick={()=>setIncDaData("")} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:12}} title="Rimuovi filtro data"><i className="ti ti-x"/></button>}
+                  {incMovs.length>0 && (
+                    <button onClick={()=>{ if(confirm("Svuotare la lista movimenti? (i pagamenti già confermati restano registrati nel cloud)")) setIncMovs([]); }} title="Pulisce solo la lista a video: i pagamenti confermati restano nel Registro incassi" style={{padding:"7px 12px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:8,fontSize:12,cursor:"pointer"}}>🧹 Svuota lista</button>
+                  )}
                   {incMovs.some(m=>!m.dup&&!m.state&&m.cliente) && (
                     <button onClick={confermaTuttiSicuri} disabled={incBusy} style={{padding:"9px 16px",background:S.good,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                       <i className="ti ti-checks"/>Conferma tutti gli abbinati ({incMovs.filter(m=>!m.dup&&!m.state&&m.cliente).length})
