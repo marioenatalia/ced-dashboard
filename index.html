@@ -1280,33 +1280,42 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         }catch(e){ setIncMsg("Errore lettura estratto: "+e.message); }
         setIncBusy(false);
       };
-      // Regola A: proforma con importo uguale, altrimenti la più vecchia aperta (FIFO per scadenza).
-      // Se il pagamento è INFERIORE alla proforma → ACCONTO: il residuo della proforma si riduce, resta aperta.
+      // Regola A + CASCATA: importo uguale → quella; altrimenti alloca sulle aperte in ordine
+      // di scadenza (FIFO): salda le più vecchie finché il pagamento copre, l'ultima parte è ACCONTO.
+      // Se il pagamento è inferiore alla prima → acconto (residuo ridotto, resta aperta).
       const confermaIncasso = async(mov, cliente, learnAlias, pfChosen)=>{
-        const open=foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0);
-        let pf=pfChosen || open.find(p=>Math.abs(Number(p.importo)-mov.importo)<0.01);
-        if(!pf&&open.length) pf=[...open].sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")))[0];
-        const pag={cliente_id:cliente.id,proforma_id:pf?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:mov.desc||mov.nome||"",mov_key:mov.key};
+        const open=foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0)
+          .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")));
+        // coda di allocazione: proforma scelta a mano, oppure match esatto, oppure FIFO su tutte
+        let coda;
+        if(pfChosen) coda=[pfChosen];
+        else { const esatta=open.find(p=>Math.abs(Number(p.importo)-mov.importo)<0.01); coda = esatta ? [esatta] : open; }
+        const pag={cliente_id:cliente.id,proforma_id:coda[0]?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:mov.desc||mov.nome||"",mov_key:mov.key};
         const ins=await sbInsert("pagamenti",[pag]);
-        let esito="";
-        if(pf){
+        let resto=mov.importo; const esiti=[]; const patchLocal=[];
+        for(const pf of coda){
+          if(resto<=0.009) break;
           const imp=Number(pf.importo)||0;
-          if(mov.importo >= imp-0.01){
+          if(resto >= imp-0.01){
             await sbUpdate("proforme",`id=eq.${pf.id}`,{pagato:true,data_pagamento:pag.data});
-            setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===pf.id?{...p,pagato:true,data_pagamento:pag.data}:p)}));
-            esito="PAGATA "+(PLABEL[pf.periodo]||pf.periodo);
+            patchLocal.push({id:pf.id,patch:{pagato:true,data_pagamento:pag.data}});
+            esiti.push("PAGATA "+(PLABEL[pf.periodo]||pf.periodo));
+            resto=Math.round((resto-imp)*100)/100;
           } else {
-            const residuo=Math.round((imp-mov.importo)*100)/100;
-            const nota=((pf.note||"")+` · acconto ${fmt(mov.importo)} il ${fmtD(pag.data)}`).slice(0,500);
+            const residuo=Math.round((imp-resto)*100)/100;
+            const nota=((pf.note||"")+` · acconto ${fmt(resto)} il ${fmtD(pag.data)}`).slice(0,500);
             await sbUpdate("proforme",`id=eq.${pf.id}`,{importo:residuo,note:nota});
-            setFoglio(f=>({...f,proforme:f.proforme.map(p=>p.id===pf.id?{...p,importo:residuo,note:nota}:p)}));
-            esito=`ACCONTO su ${PLABEL[pf.periodo]||pf.periodo} · residuo ${fmt(residuo)}`;
+            patchLocal.push({id:pf.id,patch:{importo:residuo,note:nota}});
+            esiti.push(`ACCONTO su ${PLABEL[pf.periodo]||pf.periodo} (residuo ${fmt(residuo)})`);
+            resto=0;
           }
         }
+        if(resto>0.009 && esiti.length) esiti.push(`eccedenza ${fmt(resto)} non allocata`);
         if(learnAlias && mov.nome){ try{ await sbInsert("alias_banca",[{testo_banca:mov.nome,cliente_id:cliente.id}]); }catch(e){} }
         setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])],
+          proforme:f.proforme.map(p=>{ const pl=patchLocal.find(x=>x.id===p.id); return pl?{...p,...pl.patch}:p; }),
           alias:learnAlias&&mov.nome?[...(f.alias||[]),{testo_banca:mov.nome,cliente_id:cliente.id}]:f.alias}));
-        return {pf,esito};
+        return {pf:coda[0]||null,esito:esiti.join(" · ")};
       };
       const confermaMov = async(mov, cliente, learn, pfChosen)=>{
         setIncBusy(true);
