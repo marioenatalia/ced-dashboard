@@ -465,7 +465,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           const dt=new Date(_today.getFullYear(),_today.getMonth()-k,1);
           const me=new Date(_today.getFullYear(),_today.getMonth()-k+1,1);
           let v=0;
-          if(usaFoglio) (foglio.pagamenti||[]).forEach(p=>{ const pd=new Date(p.data); if(pd>=dt&&pd<me) v+=Number(p.importo)||0; });
+          if(usaFoglio) (foglio.pagamenti||[]).forEach(p=>{ if(p.fonte==="sconto") return; const pd=new Date(p.data); if(pd>=dt&&pd<me) v+=Number(p.importo)||0; });
           else srcInv.forEach(i=>(i.payments||[]).forEach(p=>{ const pd=new Date(p.date); if(pd>=dt&&pd<me) v+=p.amount; }));
           inc.push({label:mLabels[dt.getMonth()],value:v,color:S.good});
         }
@@ -1372,13 +1372,16 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         const pag={cliente_id:cliente.id,proforma_id:coda[0]?.id||null,data:mov.data||todayStr(),importo:mov.importo,fonte:mov.fonte||"estratto",descrizione:mov.desc||mov.nome||"",mov_key:mov.key};
         const ins=await sbInsert("pagamenti",[pag]);
         let resto=mov.importo; const esiti=[]; const patchLocal=[];
+        const isSconto = mov.fonte==="sconto";
         for(const pf of coda){
           if(resto<=0.009) break;
           const imp=Number(pf.importo)||0;
           if(resto >= imp-0.01){
-            await sbUpdate("proforme",`id=eq.${pf.id}`,{pagato:true,data_pagamento:pag.data});
-            patchLocal.push({id:pf.id,patch:{pagato:true,data_pagamento:pag.data}});
-            esiti.push("PAGATA "+(PLABEL[pf.periodo]||pf.periodo));
+            const patch={pagato:true,data_pagamento:pag.data};
+            if(isSconto) patch.note=((pf.note||"")+` · saldata con sconto ${fmt(imp)} il ${fmtD(pag.data)}`).slice(0,500);
+            await sbUpdate("proforme",`id=eq.${pf.id}`,patch);
+            patchLocal.push({id:pf.id,patch});
+            esiti.push((isSconto?"SALDATA CON SCONTO ":"PAGATA ")+(PLABEL[pf.periodo]||pf.periodo));
             resto=Math.round((resto-imp)*100)/100;
           } else if(mov.riduzione){
             // RIDUZIONE DEBITO: il pagamento inferiore salda la proforma; l'importo a sistema
@@ -1390,10 +1393,10 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             resto=0;
           } else {
             const residuo=Math.round((imp-resto)*100)/100;
-            const nota=((pf.note||"")+` · acconto ${fmt(resto)} il ${fmtD(pag.data)}`).slice(0,500);
+            const nota=((pf.note||"")+` · ${isSconto?"sconto":"acconto"} ${fmt(resto)} il ${fmtD(pag.data)}`).slice(0,500);
             await sbUpdate("proforme",`id=eq.${pf.id}`,{importo:residuo,note:nota});
             patchLocal.push({id:pf.id,patch:{importo:residuo,note:nota}});
-            esiti.push(`ACCONTO su ${PLABEL[pf.periodo]||pf.periodo} (residuo ${fmt(residuo)})`);
+            esiti.push(`${isSconto?"SCONTO":"ACCONTO"} su ${PLABEL[pf.periodo]||pf.periodo} (residuo ${fmt(residuo)})`);
             resto=0;
           }
         }
@@ -1426,7 +1429,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         if(!cli){ setIncMsg("⚠ Cliente non trovato: scrivi e seleziona un nome dall'elenco."); return; }
         if(!(imp>0)){ setIncMsg("⚠ Importo non valido."); return; }
         const pfChosen = cashPf!=="auto" ? foglio.proforme.find(p=>p.id===cashPf) : null;
-        const TIPI={contanti:"Incasso contanti",pos:"Incasso POS",assegno:"Incasso assegno",altro:"Incasso (altro)"};
+        const TIPI={contanti:"Incasso contanti",pos:"Incasso POS",assegno:"Incasso assegno",sconto:"Sconto concesso",altro:"Incasso (altro)"};
         const mov={data:cashData||todayStr(),importo:imp,nome:cli.nome,desc:TIPI[cashTipo]||"Incasso",key:`CASH|${cli.id}|${cashData}|${imp}|${Date.now()}`,fonte:cashTipo,riduzione:cashMode==="riduzione"};
         await confermaMov(mov,cli,false,pfChosen);
         setCashImp(""); setCashPf("auto");
@@ -2277,6 +2280,7 @@ In italiano, con numeri ed euro.`,
                         <option value="contanti">💶 Contanti</option>
                         <option value="pos">💳 POS</option>
                         <option value="assegno">🧾 Assegno</option>
+                        <option value="sconto">🏷️ Sconto</option>
                         <option value="altro">Altro</option>
                       </select>
                       <div style={{position:"relative"}}>
@@ -2307,7 +2311,7 @@ In italiano, con numeri ed euro.`,
                                 <option value="riduzione">Riduzione debito — salda con importo ridotto</option>
                               </select>
                             )}
-                            {parziale && cashMode==="acconto" && <span style={{fontSize:11,color:S.warn,fontWeight:600}}>→ acconto: residuo {fmt(Number(pf.importo)-imp)}</span>}
+                            {parziale && cashMode==="acconto" && <span style={{fontSize:11,color:S.warn,fontWeight:600}}>→ {cashTipo==="sconto"?"sconto":"acconto"}: residuo {fmt(Number(pf.importo)-imp)}</span>}
                             {parziale && cashMode==="riduzione" && <span style={{fontSize:11,color:S.warnD,fontWeight:600}}>→ SALDATA: debito ridotto da {fmt(Number(pf.importo))} a {fmt(imp)}</span>}
                             {pf && imp>=Number(pf.importo)-0.01 && imp>0 && <span style={{fontSize:11,color:S.good,fontWeight:600}}>→ salda la proforma</span>}
                           </>);
@@ -2384,12 +2388,12 @@ In italiano, con numeri ed euro.`,
                 <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                     <p style={{margin:0,fontSize:13,fontWeight:600}}>Registro incassi ({foglio.pagamenti.length})</p>
-                    <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.reduce((s,p)=>s+(Number(p.importo)||0),0))}</span>
+                    <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.filter(p=>p.fonte!=="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0))}{(()=>{const sc=foglio.pagamenti.filter(p=>p.fonte==="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0); return sc>0?<span style={{color:S.warnD,fontWeight:500}}> · sconti {fmt(sc)}</span>:null;})()}</span>
                   </div>
                   {foglio.pagamenti.slice(0,50).map(p=>{ const c=foglio.clienti.find(x=>x.id===p.cliente_id); const inEdit=editPag?.id===p.id; return (
                     <div key={p.id} style={{borderTop:"0.5px solid var(--color-border-tertiary)"}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
-                        <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
+                        <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank",sconto:"ti-discount"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
                         <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span></span>
                         <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
                         {c && <button onClick={()=>openClientPdfs(c.nome)} title="Proforme PDF del cliente" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:6,padding:"2px 7px",color:C.purple,cursor:"pointer",fontSize:12}}>📄</button>}
@@ -2401,7 +2405,7 @@ In italiano, con numeri ed euro.`,
                           <input type="date" value={editPag.data} onChange={e=>setEditPag(s=>({...s,data:e.target.value}))} style={{padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}/>
                           <input type="number" value={editPag.importo} onChange={e=>setEditPag(s=>({...s,importo:e.target.value}))} style={{width:90,padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/>
                           <select value={editPag.fonte} onChange={e=>setEditPag(s=>({...s,fonte:e.target.value}))} style={{padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}>
-                            <option value="contanti">Contanti</option><option value="pos">POS</option><option value="assegno">Assegno</option><option value="estratto">Bonifico</option><option value="altro">Altro</option>
+                            <option value="contanti">Contanti</option><option value="pos">POS</option><option value="assegno">Assegno</option><option value="estratto">Bonifico</option><option value="sconto">Sconto</option><option value="altro">Altro</option>
                           </select>
                           <input value={editPag.descrizione} onChange={e=>setEditPag(s=>({...s,descrizione:e.target.value}))} placeholder="Descrizione" style={{flex:1,minWidth:120,padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}/>
                           <button onClick={salvaEditPag} style={{padding:"5px 12px",background:S.good,color:"#fff",border:"none",borderRadius:7,fontSize:11,fontWeight:600,cursor:"pointer"}}>Salva</button>
