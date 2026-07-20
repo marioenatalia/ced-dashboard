@@ -422,7 +422,7 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
           const arr=Number(c.arretrati)||0;
           if(arr>0) out.push({id:c.id+"-ARR",client:c.nome,amount:arr,paid:0,date:"",due:"2025-12-31",status:effStatus({amount:arr,paid:0,due:"2025-12-31"}),notes:[],payments:[],pdfPath:null});
           foglio.proforme.filter(p=>p.cliente_id===c.id && !p.pagato && (Number(p.importo)||0)>0).forEach(p=>{
-            const imp=Number(p.importo)||0; const due=PERIOD_DEADLINE[p.periodo]||"";
+            const imp=Number(p.importo)||0; const due=p.scadenza||PERIOD_DEADLINE[p.periodo]||"";
             out.push({id:p.id,client:c.nome,amount:imp,paid:0,date:p.data_emissione||"",due,status:effStatus({amount:imp,paid:0,due}),notes:[],payments:[],pdfPath:p.pdf_path||null});
           });
         });
@@ -1815,12 +1815,14 @@ In italiano, con numeri ed euro.`,
                 const _now=new Date();
                 const DEADM={I:3,II:6,III:9,IV:12,GEN:1,FEB:2,MAR:3,APR:4,MAG:5,GIU:6,LUG:7,AGO:8,SET:9,OTT:10,NOV:11,DIC:12,I_SEM:6,II_SEM:12,ANNO:12,BILANCIO:6};
                 const elapsed=per=>{ const m=DEADM[per]; if(!m) return false; return _now > new Date(2026,m,0,23,59,59); };
+                // la scadenza manuale (p.scadenza) ha la precedenza sul periodo standard
+                const scadutaP=p=> p.scadenza ? (_now > new Date(p.scadenza+"T23:59:59")) : elapsed(p.periodo);
                 const rows=foglio.clienti.map(c=>{
                   const pfs=foglio.proforme.filter(p=>p.cliente_id===c.id);
                   const arr=Number(c.arretrati)||0;
                   const unpaid=pfs.filter(p=>!p.pagato);
                   const dovuto=arr+unpaid.reduce((s,p)=>s+(Number(p.importo)||0),0);
-                  const scaduto=arr+unpaid.filter(p=>elapsed(p.periodo)).reduce((s,p)=>s+(Number(p.importo)||0),0);
+                  const scaduto=arr+unpaid.filter(scadutaP).reduce((s,p)=>s+(Number(p.importo)||0),0);
                   return {c,pfs,dovuto,scaduto,arr};
                 }).filter(r=>r.dovuto>0).sort((a,b)=>b.dovuto-a.dovuto);
                 const q=cliFilter.trim().toLowerCase();
@@ -1848,15 +1850,24 @@ In italiano, con numeri ed euro.`,
                             <p style={{margin:0,fontSize:14,fontWeight:700,color:S.warn}}>{fmt(r.dovuto)}</p>
                             {r.scaduto>0 && <p style={{margin:0,fontSize:10,color:S.warnD}}>scaduto {fmt(r.scaduto)}</p>}
                           </div>
+                          <button onClick={e=>{e.stopPropagation(); const v=!r.c.no_solleciti; sbUpdate("clienti",`id=eq.${r.c.id}`,{no_solleciti:v}).then(()=>setFoglio(f=>({...f,clienti:f.clienti.map(x=>x.id===r.c.id?{...x,no_solleciti:v}:x)}))).catch(err=>alert("Errore: "+err.message));}}
+                            title={r.c.no_solleciti?"Solleciti DISATTIVATI — clicca per riattivare":"Solleciti attivi — clicca per escludere dai solleciti"}
+                            style={{background:r.c.no_solleciti?C.redL:"transparent",border:r.c.no_solleciti?`1px solid ${C.red}44`:"0.5px solid var(--color-border-tertiary)",borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:13,color:r.c.no_solleciti?C.red:"var(--color-text-secondary)"}}>
+                            <i className={`ti ${r.c.no_solleciti?"ti-bell-off":"ti-bell"}`}/>
+                          </button>
                           <i className={`ti ti-chevron-${open?"down":"right"}`} style={{fontSize:14,color:"var(--color-text-secondary)"}}/>
                         </div>
                         {open && (
                           <div style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"8px 13px"}}>
+                            {r.c.no_solleciti && <p style={{margin:"4px 0",fontSize:11,color:C.red,fontWeight:600}}><i className="ti ti-bell-off"/> Cliente escluso dai solleciti WhatsApp</p>}
                             {r.arr>0 && <div style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0"}}><span style={{color:S.warnD}}>Arretrati 31/12/2025</span><b>{fmt(r.arr)}</b></div>}
                             {r.pfs.sort((a,b)=>(DEADM[a.periodo]||13)-(DEADM[b.periodo]||13)).map(p=>(
-                              <div key={p.id} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
-                                <span>{PLABEL[p.periodo]||p.periodo} {p.pagato?<span style={{color:S.good}}>· PAGATO</span>:elapsed(p.periodo)?<span style={{color:S.warnD}}>· scaduto</span>:<span style={{color:"var(--color-text-secondary)"}}>· a scadere</span>}</span>
-                                <b style={{color:p.pagato?S.good:"inherit"}}>{fmt(p.importo)}</b>
+                              <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:11,padding:"4px 0",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                                <span style={{flex:1}}>{PLABEL[p.periodo]||p.periodo} {p.pagato?<span style={{color:S.good}}>· PAGATO</span>:scadutaP(p)?<span style={{color:S.warnD}}>· scaduto</span>:<span style={{color:"var(--color-text-secondary)"}}>· a scadere</span>}</span>
+                                {!p.pagato && <input type="date" value={p.scadenza||""} title="Scadenza manuale (vuota = scadenza standard del periodo)"
+                                  onChange={e=>{ const v=e.target.value||null; sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v}).then(()=>setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:v}:x)}))).catch(err=>alert("Errore: "+err.message)); }}
+                                  style={{padding:"2px 5px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:"var(--color-surface)",color:p.scadenza?S.slateD:"var(--color-text-secondary)",fontSize:10}}/>}
+                                <b style={{color:p.pagato?S.good:"inherit",minWidth:64,textAlign:"right"}}>{fmt(p.importo)}</b>
                               </div>
                             ))}
                           </div>
