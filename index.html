@@ -2128,10 +2128,11 @@ In italiano, con numeri ed euro.`,
                             <p style={{margin:0,fontSize:14,fontWeight:700,color:S.warn}}>{fmt(r.dovuto)}</p>
                             {r.scaduto>0 && <p style={{margin:0,fontSize:10,color:S.warnD}}>scaduto {fmt(r.scaduto)}</p>}
                           </div>
+                          <button onClick={e=>{e.stopPropagation(); openClientPdfs(r.c.nome);}} title="Scheda cliente: riepilogo, proforme con scadenze modificabili, PDF" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:13,color:C.purple}}>📂</button>
                           <button onClick={e=>{e.stopPropagation(); const v=!r.c.no_solleciti; sbUpdate("clienti",`id=eq.${r.c.id}`,{no_solleciti:v}).then(()=>setFoglio(f=>({...f,clienti:f.clienti.map(x=>x.id===r.c.id?{...x,no_solleciti:v}:x)}))).catch(err=>alert("Errore: "+err.message));}}
                             title={r.c.no_solleciti?"Solleciti DISATTIVATI — clicca per riattivare":"Solleciti attivi — clicca per escludere dai solleciti"}
                             style={{background:r.c.no_solleciti?C.redL:"transparent",border:r.c.no_solleciti?`1px solid ${C.red}44`:"0.5px solid var(--color-border-tertiary)",borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:13,color:r.c.no_solleciti?C.red:"var(--color-text-secondary)"}}>
-                            <i className={`ti ${r.c.no_solleciti?"ti-bell-off":"ti-bell"}`}/>
+                            {r.c.no_solleciti?"🔕":"🔔"}
                           </button>
                           <i className={`ti ti-chevron-${open?"down":"right"}`} style={{fontSize:14,color:"var(--color-text-secondary)"}}/>
                         </div>
@@ -3133,9 +3134,23 @@ In italiano, con numeri ed euro.`,
             return (
             <div onClick={()=>setIncPdfCli(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.45)",zIndex:200,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 16px",overflowY:"auto"}}>
               <div onClick={e=>e.stopPropagation()} style={{background:"var(--color-surface)",border:`1px solid ${C.purple}44`,borderRadius:14,padding:"14px 16px",boxShadow:"0 12px 40px rgba(0,0,0,.25)",width:"100%",maxWidth:760,maxHeight:"85vh",overflowY:"auto"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8,flexWrap:"wrap"}}>
                   <p style={{margin:0,fontSize:14,fontWeight:700,color:C.purple}}>📂 {incPdfCli}</p>
-                  <button onClick={()=>setIncPdfCli(null)} style={{background:"var(--color-background-secondary)",border:"none",borderRadius:7,padding:"4px 10px",color:"var(--color-text-primary)",cursor:"pointer",fontSize:13,fontWeight:600}}>✕ Chiudi</button>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    {cliObj && (
+                      <select value={cliObj.trattamento||"normale"} onChange={async e=>{ const v=e.target.value;
+                        try{ await sbUpdate("clienti",`id=eq.${cliObj.id}`,{trattamento:v});
+                          setFoglio(f=>({...f,clienti:f.clienti.map(x=>x.id===cliObj.id?{...x,trattamento:v}:x)}));
+                        }catch(err){ alert("Per salvare il tipo di sollecito serve la colonna 'trattamento' nel DB.\\nEsegui su Supabase (SQL Editor):\\n\\nalter table clienti add column if not exists trattamento text not null default 'normale';"); } }}
+                        title="Tipo di sollecito WhatsApp per questo cliente: normale 7/15/30/45gg · cortese max 2 solleciti gentili · monitorato solleciti più frequenti e prioritari"
+                        style={{padding:"5px 8px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,fontWeight:600}}>
+                        <option value="normale">⚖️ Sollecito normale</option>
+                        <option value="cortese">🕊️ Cortese (max 2, toni gentili)</option>
+                        <option value="monitorato">👁️ Monitorato (frequente, priorità)</option>
+                      </select>
+                    )}
+                    <button onClick={()=>setIncPdfCli(null)} style={{background:"var(--color-background-secondary)",border:"none",borderRadius:7,padding:"4px 10px",color:"var(--color-text-primary)",cursor:"pointer",fontSize:13,fontWeight:600}}>✕ Chiudi</button>
+                  </div>
                 </div>
                 {cliObj ? (<>
                   <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
