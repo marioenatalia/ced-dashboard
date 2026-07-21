@@ -3185,6 +3185,27 @@ In italiano, con numeri ed euro.`,
                                 title="Scadenza personalizzata: i solleciti WhatsApp contano i giorni da questa data (vuota = scadenza standard del periodo)"
                                 style={{padding:"2px 5px",borderRadius:5,border:`1px solid ${p.scadenza?S.warnD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:112}}/>
                               <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{p.scadenza?"":(sc?`std ${fmtD(sc)}`:"")}</span>
+                              <button onClick={async()=>{ const v=parseFloat((prompt(`Nuovo importo dovuto per ${PLABEL[p.periodo]||p.periodo} (attuale ${fmt(p.importo)}):`)||"").replace(",",".")); if(!(v>=0)) return;
+                                const motivo=prompt("Motivo della modifica (verrà salvato come nota):")||"";
+                                const nota=((p.note||"")+` · importo modificato da ${fmt(p.importo)} a ${fmt(v)}${motivo?` — ${motivo}`:""} (${fmtD(todayStr())})`).slice(0,500);
+                                try{ await sbUpdate("proforme",`id=eq.${p.id}`,{importo:v,note:nota});
+                                  setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,importo:v,note:nota}:x)}));
+                                }catch(err){ alert("Errore: "+err.message); } }}
+                                title="Modifica il debito di questa proforma (con nota del motivo)" style={{background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"1px 6px",color:S.slateD,cursor:"pointer",fontSize:11}}>✏️€</button>
+                              <button onClick={async()=>{ const imp=Number(p.importo)||0;
+                                const v=parseFloat((prompt(`Sconto da concedere su ${PLABEL[p.periodo]||p.periodo} (dovuto ${fmt(imp)}):\n= importo pieno → la proforma viene SALDATA con sconto\n< importo → il debito viene ridotto`)||"").replace(",","."));
+                                if(!(v>0)) return;
+                                const motivo=prompt("Motivo dello sconto (nota):")||"";
+                                try{
+                                  const pieno=v>=imp-0.01;
+                                  const patch=pieno
+                                    ? {pagato:true,data_pagamento:todayStr(),note:((p.note||"")+` · saldata con sconto ${fmt(v)}${motivo?` — ${motivo}`:""} (${fmtD(todayStr())})`).slice(0,500)}
+                                    : {importo:Math.round((imp-v)*100)/100,note:((p.note||"")+` · sconto ${fmt(v)}${motivo?` — ${motivo}`:""}, debito ridotto a ${fmt(imp-v)} (${fmtD(todayStr())})`).slice(0,500)};
+                                  await sbUpdate("proforme",`id=eq.${p.id}`,patch);
+                                  const ins=await sbInsert("pagamenti",[{cliente_id:p.cliente_id,proforma_id:p.id,data:todayStr(),importo:v,fonte:"sconto",descrizione:(`Sconto su ${PLABEL[p.periodo]||p.periodo}${motivo?` — 📝 ${motivo}`:""}`).slice(0,300),mov_key:`SCONTO|${p.id}|${todayStr()}|${v}|${Date.now()}`}]);
+                                  setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])],proforme:f.proforme.map(x=>x.id===p.id?{...x,...patch}:x)}));
+                                }catch(err){ alert("Errore: "+err.message); } }}
+                                title="Concedi uno sconto: registrato a registro incassi e annotato sulla proforma" style={{background:S.warnD+"14",border:`1px solid ${S.warnD}44`,borderRadius:6,padding:"1px 6px",color:S.warnD,cursor:"pointer",fontSize:11}}>🏷️</button>
                             </span>
                           )}
                           {p.note && <span style={{flex:1,fontSize:10,fontStyle:"italic",color:S.warnD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p.note}>📌 {p.note}</span>}
