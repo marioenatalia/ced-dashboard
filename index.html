@@ -1090,10 +1090,11 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           return (k&&fnN&&(k.includes(fnN)||fnN.includes(k))) || (kc&&fnC&&(kc.slice(0,6)===fnC.slice(0,6))); };
         addLog(filt?`Riconciliazione SOLO per "${filt}"...`:"Riconciliazione: raccolta proforma 2026 da Yandex...");
         // 1) raccogli PDF 2026 (cartella cliente + sottocartelle, salta EX CLIENTI)
-        const pdfs=[];
+        const pdfs=[]; let scanCount=0;
         const walk=async(path,depth,clientFolder)=>{
           if(recoRef.current.stop||depth>5) return;
           let d; try{ d=await ydList(ydToken,path);}catch(e){return;}
+          scanCount++; if(scanCount%25===0) addLog(`Scansione cartelle: ${scanCount} esaminate, ${pdfs.length} PDF 2026 trovati finora...`);
           for(const it of (d._embedded?.items||[])){
             if(it.type==="file" && it.name.toLowerCase().endsWith(".pdf")){
               // È una proforma 2026 se: anno nel nome file (doc...2026...) oppure notula
