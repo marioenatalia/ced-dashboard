@@ -2632,29 +2632,90 @@ In italiano, con numeri ed euro.`,
           )}
 
           {/* ══ PAGAMENTI ══ */}
-          {tab==="pagamenti" && (
+          {tab==="pagamenti" && (()=>{
+            const FONTI={estratto:["🏦","Bonifici"],contanti:["💶","Contanti"],pos:["💳","POS"],assegno:["🧾","Assegni"],sconto:["🏷️","Sconti"],altro:["•","Altro"]};
+            const fk=f=>FONTI[f]?f:"altro";
+            const q=search.trim().toLowerCase();
+            const pags=(foglio.pagamenti||[]).map(p=>({...p,cliNome:(foglio.clienti.find(c=>c.id===p.cliente_id)||{}).nome||"—"}))
+              .filter(p=>!q||p.cliNome.toLowerCase().includes(q)||(p.descrizione||"").toLowerCase().includes(q));
+            const MESI_IT=["","Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
+            const byMonth={};
+            pags.forEach(p=>{ const m=(p.data||"").slice(0,7)||"—"; (byMonth[m]=byMonth[m]||[]).push(p); });
+            const mesi=Object.keys(byMonth).sort().reverse();
+            const meseLabel=m=>{ const[y,mm]=m.split("-"); return (MESI_IT[Number(mm)]||m)+" "+y; };
+            const esportaExcel=async()=>{
+              if(!window.ExcelJS){ alert("Libreria Excel non ancora caricata, riprova tra un secondo."); return; }
+              const wb=new ExcelJS.Workbook();
+              for(const m of mesi){
+                const ws=wb.addWorksheet(meseLabel(m).slice(0,30));
+                ws.columns=[{header:"Data",width:12},{header:"Cliente",width:42},{header:"Tipologia",width:12},{header:"Importo €",width:12},{header:"Note / descrizione",width:60}];
+                ws.getRow(1).font={bold:true}; ws.getRow(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF334155"}}; ws.getRow(1).font={bold:true,color:{argb:"FFFFFFFF"}};
+                let totMese=0;
+                for(const f of Object.keys(FONTI)){
+                  const rows=byMonth[m].filter(p=>fk(p.fonte)===f).sort((a,b)=>String(a.data).localeCompare(String(b.data)));
+                  if(!rows.length) continue;
+                  let tot=0;
+                  rows.forEach(p=>{ ws.addRow([p.data?fmtD(p.data):"",p.cliNome,FONTI[f][1],Number(p.importo)||0,(p.descrizione||"")]); tot+=Number(p.importo)||0; });
+                  const tr=ws.addRow(["","TOTALE "+FONTI[f][1].toUpperCase(),"",tot,""]); tr.font={bold:true};
+                  if(f!=="sconto") totMese+=tot;
+                }
+                const gr=ws.addRow(["","TOTALE INCASSATO "+meseLabel(m).toUpperCase(),"",totMese,"(sconti esclusi)"]); gr.font={bold:true,color:{argb:"FF15803D"}};
+                ws.getColumn(4).numFmt='#,##0.00';
+              }
+              const buf=await wb.xlsx.writeBuffer();
+              const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([buf])); a.download=`Registro_incassi_${todayStr()}.xlsx`; a.click();
+            };
+            return (
             <div>
-              <div style={{position:"relative",marginBottom:12}}>
-                <i className="ti ti-search" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--color-text-secondary)"}}/>
-                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cerca cliente o numero proforma..." style={{width:"100%",padding:"9px 34px 9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
-                {search && <button onClick={()=>setSearch("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:15}}><i className="ti ti-x"/></button>}
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12}}>
+                <div style={{position:"relative",flex:1}}>
+                  <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cerca cliente o descrizione..." style={{width:"100%",padding:"9px 34px 9px 12px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                  {search && <button onClick={()=>setSearch("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:14}}>✕</button>}
+                </div>
+                <button onClick={esportaExcel} disabled={!pags.length} style={{padding:"9px 16px",background:S.good,color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>⬇️ Esporta Excel (un foglio per mese)</button>
               </div>
-              <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                <h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:500}}>Registro incassi</h3>
-                {invoices.filter(i=>i.payments.length>0).flatMap(i=>i.payments.map(p=>({...p,client:i.client,invoice:i.id}))).filter(p=>{ const q=search.trim().toLowerCase(); return !q || (p.client||"").toLowerCase().includes(q) || (p.invoice||"").toLowerCase().includes(q); }).sort((a,b)=>new Date(b.date)-new Date(a.date)).map((p,i)=>(
-                  <div key={i} style={{display:"flex",alignItems:"center",padding:"7px 0",borderBottom:"0.5px solid var(--color-border-tertiary)",gap:9}}>
-                    <div style={{width:30,height:30,borderRadius:7,background:C.greenL,display:"flex",alignItems:"center",justifyContent:"center"}}><i className="ti ti-arrow-down" style={{color:C.green,fontSize:13}}/></div>
-                    <div style={{flex:1}}><p style={{margin:0,fontSize:12,fontWeight:500}}>{p.client}</p><p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{p.invoice} · {p.method} · {fmtD(p.date)}</p></div>
-                    <span style={{fontSize:13,fontWeight:500,color:C.green}}>{fmt(p.amount)}</span>
+              {!pags.length && <p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Nessun pagamento nel registro cloud. Se hai appena aperto la pagina, vai su Foglio → Ricarica dal cloud.</p>}
+              {mesi.map(m=>{
+                const rows=byMonth[m];
+                const totF={}; rows.forEach(p=>{ const f=fk(p.fonte); totF[f]=(totF[f]||0)+(Number(p.importo)||0); });
+                const totMese=Object.entries(totF).filter(([f])=>f!=="sconto").reduce((s,[,v])=>s+v,0);
+                return (
+                <div key={m} style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginBottom:12}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6,marginBottom:6}}>
+                    <p style={{margin:0,fontSize:14,fontWeight:700}}>{meseLabel(m)}</p>
+                    <span style={{fontSize:12,fontWeight:700,color:S.good}}>{fmt(totMese)}{totF.sconto?<span style={{color:S.warnD,fontWeight:500}}> · sconti {fmt(totF.sconto)}</span>:null}</span>
                   </div>
-                ))}
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div style={{background:C.greenL,borderRadius:12,padding:"12px 14px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.teal,fontWeight:500}}>INCASSATO</p><p style={{margin:0,fontSize:20,fontWeight:500,color:C.green}}>{fmt(incassato)}</p></div>
-                <div style={{background:C.amberL,borderRadius:12,padding:"12px 14px"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.amber,fontWeight:500}}>DA INCASSARE</p><p style={{margin:0,fontSize:20,fontWeight:500,color:C.amber}}>{fmt(residuo)}</p></div>
-              </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                    {Object.keys(FONTI).filter(f=>totF[f]).map(f=>(
+                      <span key={f} style={{fontSize:11,padding:"3px 9px",borderRadius:14,background:"var(--color-background-secondary)",color:"var(--color-text-primary)",fontWeight:600}}>{FONTI[f][0]} {FONTI[f][1]}: {fmt(totF[f])}</span>
+                    ))}
+                  </div>
+                  {Object.keys(FONTI).map(f=>{
+                    const rf=rows.filter(p=>fk(p.fonte)===f).sort((a,b)=>String(b.data).localeCompare(String(a.data)));
+                    if(!rf.length) return null;
+                    return (
+                    <div key={f} style={{marginBottom:6}}>
+                      <p style={{margin:"6px 0 2px",fontSize:11,fontWeight:700,color:"var(--color-text-secondary)"}}>{FONTI[f][0]} {FONTI[f][1].toUpperCase()} ({rf.length})</p>
+                      {rf.map(p=>(
+                        <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0 4px 8px",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                          <span style={{minWidth:70,fontSize:11,color:"var(--color-text-secondary)"}}>{p.data?fmtD(p.data):"—"}</span>
+                          <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.cliNome}
+                            {(p.descrizione||"").includes("📝")&&<span style={{fontSize:10,color:S.warnD,fontStyle:"italic"}} title={p.descrizione}> · {p.descrizione.slice(p.descrizione.indexOf("📝"),p.descrizione.indexOf("📝")+50)}</span>}
+                            {(p.descrizione||"").includes("solo per record")&&<span style={{fontSize:9,padding:"0 5px",borderRadius:5,background:S.warnD+"18",color:S.warnD,fontWeight:600,marginLeft:4}}>RECORD</span>}
+                          </span>
+                          <b style={{fontSize:12,color:f==="sconto"?S.warnD:S.good}}>{fmt(p.importo)}</b>
+                          <button onClick={()=>openClientPdfs(p.cliNome)} title="Scheda cliente" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:6,padding:"1px 6px",color:C.purple,cursor:"pointer",fontSize:11}}>📄</button>
+                        </div>
+                      ))}
+                    </div>
+                    );
+                  })}
+                </div>
+                );
+              })}
             </div>
-          )}
+            );
+          })()}
 
           {/* ══ YANDEX ══ */}
           {tab==="yandex" && (
