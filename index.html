@@ -2346,7 +2346,7 @@ In italiano, con numeri ed euro.`,
                       <tbody>
                         {clienti.map((c,ri)=>(
                           <tr key={c.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)",background:c.stato==="uscito"?C.coralL+"55":(ri%2?"var(--color-background-secondary)":"transparent")}}>
-                            <td style={{padding:"6px 10px",position:"sticky",left:0,background:"inherit",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:180}} title={c.tariffa||""}>{c.nome}{c.stato==="uscito"&&<span style={{fontSize:9,color:C.coral,marginLeft:4}}>uscito</span>}</td>
+                            <td style={{padding:"6px 10px",position:"sticky",left:0,background:"inherit",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:180,cursor:"pointer"}} title={(c.tariffa?c.tariffa+" — ":"")+"clicca per aprire la scheda cliente (debiti, sconti, scadenze, PDF)"} onClick={()=>openClientPdfs(c.nome)}>📂 {c.nome}{c.stato==="uscito"&&<span style={{fontSize:9,color:C.coral,marginLeft:4}}>uscito</span>}</td>
                             <td style={{padding:"3px 4px"}}><input defaultValue={c.arretrati||""} onBlur={e=>{const v=parseFloat(e.target.value)||0; if(v!==Number(c.arretrati)) saveArretrati(c,v);}} style={{width:58,padding:"4px",borderRadius:5,border:"0.5px solid var(--color-border-tertiary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,textAlign:"right"}}/></td>
                             {periods.map(per=>{ const p=pf(c.id,per); const paid=p?.pagato; const imp=Number(p?.importo)||0; return (
                               <td key={per} style={{padding:"3px 4px",textAlign:"center"}}>
