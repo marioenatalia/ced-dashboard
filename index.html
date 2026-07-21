@@ -2558,6 +2558,34 @@ In italiano, con numeri ed euro.`,
                   );})}
                 </div>
               )}
+
+              {/* Riepilogo mensile per tipologia (contanti/bonifici/POS/...) */}
+              {(foglio.pagamenti||[]).length>0 && (()=>{
+                const FONTI={estratto:["🏦","Bonifici"],contanti:["💶","Contanti"],pos:["💳","POS"],assegno:["🧾","Assegni"],sconto:["🏷️","Sconti"],altro:["•","Altro"]};
+                const fk=f=>FONTI[f]?f:"altro";
+                const MESI_IT=["","Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
+                const byM={};
+                (foglio.pagamenti||[]).forEach(p=>{ const m=(p.data||"").slice(0,7)||"—"; byM[m]=byM[m]||{n:0}; const f=fk(p.fonte); byM[m][f]=(byM[m][f]||0)+(Number(p.importo)||0); byM[m].n++; });
+                const mesi=Object.keys(byM).sort().reverse();
+                return (
+                <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginTop:12}}>
+                  <p style={{margin:"0 0 8px",fontSize:13,fontWeight:600}}>Riepilogo mensile per tipologia</p>
+                  {mesi.map(m=>{ const d=byM[m]; const[y,mm]=m.split("-");
+                    const tot=Object.keys(FONTI).filter(f=>f!=="sconto").reduce((s,f)=>s+(d[f]||0),0);
+                    return (
+                    <div key={m} style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",padding:"7px 0",borderTop:"0.5px solid var(--color-border-tertiary)"}}>
+                      <span style={{minWidth:110,fontSize:12,fontWeight:700}}>{(MESI_IT[Number(mm)]||m)+" "+(y||"")}</span>
+                      {Object.keys(FONTI).filter(f=>d[f]).map(f=>(
+                        <span key={f} style={{fontSize:11,padding:"3px 9px",borderRadius:14,background:f==="sconto"?S.warnD+"14":"var(--color-background-secondary)",color:f==="sconto"?S.warnD:"var(--color-text-primary)",fontWeight:600}}>{FONTI[f][0]} {FONTI[f][1]} {fmt(d[f])}</span>
+                      ))}
+                      <span style={{marginLeft:"auto",fontSize:12,fontWeight:700,color:S.good}}>{fmt(tot)}</span>
+                    </div>
+                    );
+                  })}
+                  <p style={{margin:"8px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Dettaglio completo e export Excel nella scheda <b>Pagamenti</b>. Gli sconti non entrano nel totale.</p>
+                </div>
+                );
+              })()}
             </div>
           )}
 
