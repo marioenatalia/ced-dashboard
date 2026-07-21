@@ -2532,7 +2532,20 @@ In italiano, con numeri ed euro.`,
                     <p style={{margin:0,fontSize:13,fontWeight:600}}>Registro incassi ({foglio.pagamenti.length})</p>
                     <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.filter(p=>p.fonte!=="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0))}{(()=>{const sc=foglio.pagamenti.filter(p=>p.fonte==="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0); return sc>0?<span style={{color:S.warnD,fontWeight:500}}> · sconti {fmt(sc)}</span>:null;})()}</span>
                   </div>
-                  {foglio.pagamenti.slice(0,50).map(p=>{ const c=foglio.clienti.find(x=>x.id===p.cliente_id); const inEdit=editPag?.id===p.id; return (
+                  {(()=>{
+                    const FONTI={estratto:["🏦","BONIFICI"],contanti:["💶","CONTANTI"],pos:["💳","POS"],assegno:["🧾","ASSEGNI"],sconto:["🏷️","SCONTI"],altro:["•","ALTRO"]};
+                    const fk=f=>FONTI[f]?f:"altro";
+                    const MESI_IT=["","Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
+                    const byM={};
+                    foglio.pagamenti.forEach(p=>{ const m=(p.data||"").slice(0,7)||"—"; (byM[m]=byM[m]||[]).push(p); });
+                    const mesi=Object.keys(byM).sort().reverse();
+                    return mesi.flatMap(m=>{ const[y,mm]=m.split("-");
+                      const out=[<p key={"m"+m} style={{margin:"12px 0 2px",fontSize:13,fontWeight:700,color:S.slateD}}>{(MESI_IT[Number(mm)]||m)+" "+(y||"")}</p>];
+                      for(const f of Object.keys(FONTI)){
+                        const rf=byM[m].filter(p=>fk(p.fonte)===f).sort((a,b)=>String(b.data).localeCompare(String(a.data)));
+                        if(!rf.length) continue;
+                        out.push(<p key={"f"+m+f} style={{margin:"6px 0 1px",fontSize:11,fontWeight:700,color:f==="sconto"?S.warnD:"var(--color-text-secondary)"}}>{FONTI[f][0]} {FONTI[f][1]} ({rf.length}) · {fmt(rf.reduce((s,p)=>s+(Number(p.importo)||0),0))}</p>);
+                        out.push(...rf.map(p=>{ const c=foglio.clienti.find(x=>x.id===p.cliente_id); const inEdit=editPag?.id===p.id; return (
                     <div key={p.id} style={{borderTop:"0.5px solid var(--color-border-tertiary)"}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
                         <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank",sconto:"ti-discount"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
@@ -2555,7 +2568,11 @@ In italiano, con numeri ed euro.`,
                         </div>
                       )}
                     </div>
-                  );})}
+                        );}));
+                      }
+                      return out;
+                    });
+                  })()}
                 </div>
               )}
 
