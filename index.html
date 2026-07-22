@@ -1321,17 +1321,31 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       // ── PDF cliente dalla tab Incassi: trova la cartella Yandex dal nome ──
       const findYdFolder = async(nomeCliente)=>{
-        const n=normName(nomeCliente); if(!n) return null;
-        // 1) dall'anagrafica cartelle già scansionata
-        const hit=(folderClients||[]).find(c=>{ const k=normName(c.name); return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); });
-        if(hit) return {name:hit.name, path:hit.path};
-        // 2) ricerca diretta su Yandex nella lettera iniziale (e rami categoria)
+        const n0=normName(nomeCliente); if(!n0) return null;
+        // candidati: nome anagrafica + tutti gli alias del cliente (cartelle Yandex
+        // intestate al titolare, es. "MDC TRANS DI MANIU DUMITRU" per MDC TRASPORTI)
+        const cliRec=foglio.clienti.find(c=>normName(c.nome)===n0)
+          || foglio.clienti.find(c=>{ const k=normName(c.nome); return k.startsWith(n0.slice(0,8))||n0.startsWith(k.slice(0,8)); });
+        const candidati=[nomeCliente, ...(cliRec?(foglio.alias||[]).filter(a=>a.cliente_id===cliRec.id).map(a=>a.testo_banca):[])];
+        const matchN=(folderName,n)=>{ const k=normName(folderName); return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); };
+        for(const cand of candidati){
+          const n=normName(cand); if(!n) continue;
+          // 1) dall'anagrafica cartelle già scansionata
+          const hit=(folderClients||[]).find(c=>matchN(c.name,n));
+          if(hit) return {name:hit.name, path:hit.path};
+        }
+        // 2) ricerca diretta su Yandex: lettera iniziale di ogni candidato + rami categoria
         if(!ydToken) return null;
-        const lettera=(nomeCliente.trim()[0]||"").toUpperCase();
-        for(const base of ["/"+lettera,"/MENSILI","/RAGAZZI","/BILANCI"]){
+        const basi=new Set();
+        candidati.forEach(cand=>{ const L=(String(cand).trim()[0]||"").toUpperCase(); if(/[A-Z]/.test(L)) basi.add("/"+L); });
+        ["/MENSILI","/RAGAZZI","/BILANCI"].forEach(b=>basi.add(b));
+        for(const base of basi){
           try{ const d=await ydList(ydToken,base);
-            const f=(d._embedded?.items||[]).find(it=>{ if(it.type!=="dir") return false; const k=normName(it.name); return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); });
-            if(f) return {name:f.name, path:f.path};
+            for(const cand of candidati){
+              const n=normName(cand); if(!n) continue;
+              const f=(d._embedded?.items||[]).find(it=>it.type==="dir"&&matchN(it.name,n));
+              if(f) return {name:f.name, path:f.path};
+            }
           }catch(e){}
         }
         return null;
