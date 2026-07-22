@@ -2140,8 +2140,9 @@ In italiano, con numeri ed euro.`,
                   const arr=Number(c.arretrati)||0;
                   const unpaid=pfs.filter(p=>!p.pagato);
                   const dovuto=arr+unpaid.reduce((s,p)=>s+(Number(p.importo)||0),0);
+                  const dovutoImp=arr+unpaid.reduce((s,p)=>s+(Number(p.imponibile!=null?p.imponibile:p.importo)||0),0);
                   const scaduto=arr+unpaid.filter(scadutaP).reduce((s,p)=>s+(Number(p.importo)||0),0);
-                  return {c,pfs,dovuto,scaduto,arr};
+                  return {c,pfs,dovuto,dovutoImp,scaduto,arr};
                 });
                 const rows=rowsAll.filter(r=>r.dovuto>0).sort((a,b)=>b.dovuto-a.dovuto);
                 const q=cliFilter.trim().toLowerCase();
@@ -2182,7 +2183,7 @@ In italiano, con numeri ed euro.`,
                             {r.open.map(p=>{ const std=PERIOD_DEADLINE[p.periodo]; return (
                               <span key={p.id} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11}}>
                                 <span style={{fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
-                                <span style={{color:S.warnD,fontWeight:600}}>{fmt(p.importo)}</span>
+                                <span style={{color:S.warnD,fontWeight:600}}>{fmt(p.importo)}{p.imponibile!=null&&Math.abs(Number(p.imponibile)-Number(p.importo))>0.01?<span style={{fontSize:9,fontWeight:500,color:"var(--color-text-secondary)"}}> (imp. {fmt(p.imponibile)})</span>:null}</span>
                                 <input type="date" value={p.scadenza||""} onChange={async e=>{ const v=e.target.value||null;
                                   try{ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v});
                                     setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:v}:x)}));
@@ -2209,6 +2210,7 @@ In italiano, con numeri ed euro.`,
                           </div>
                           <div style={{textAlign:"right"}}>
                             <p style={{margin:0,fontSize:14,fontWeight:700,color:S.warn}}>{fmt(r.dovuto)}</p>
+                            {Math.abs(r.dovutoImp-r.dovuto)>0.01 && <p style={{margin:0,fontSize:9,color:"var(--color-text-secondary)"}}>imp. {fmt(r.dovutoImp)}</p>}
                             {r.scaduto>0 && <p style={{margin:0,fontSize:10,color:S.warnD}}>scaduto {fmt(r.scaduto)}</p>}
                           </div>
                           <button onClick={e=>{e.stopPropagation(); openClientPdfs(r.c.nome);}} title="Scheda cliente: riepilogo, proforme con scadenze modificabili, PDF" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:13,color:C.purple}}>📂</button>
@@ -3227,6 +3229,7 @@ In italiano, con numeri ed euro.`,
             const oggi = todayStr();
             const scadEff = p => p.scadenza || PERIOD_DEADLINE[p.periodo] || "";
             const dovuto = aperte.reduce((s,p)=>s+(Number(p.importo)||0),0);
+            const dovutoImp = aperte.reduce((s,p)=>s+(Number(p.imponibile!=null?p.imponibile:p.importo)||0),0);
             const scaduto = aperte.filter(p=>scadEff(p) && scadEff(p)<oggi).reduce((s,p)=>s+(Number(p.importo)||0),0);
             const pags = cliObj ? (foglio.pagamenti||[]).filter(p=>p.cliente_id===cliObj.id).slice(0,5) : [];
             return (
@@ -3255,6 +3258,7 @@ In italiano, con numeri ed euro.`,
                     <div style={{flex:"1 1 120px",padding:"8px 12px",borderRadius:10,background:S.warn+"12",border:`1px solid ${S.warn}33`}}>
                       <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>DA INCASSARE</p>
                       <p style={{margin:0,fontSize:16,fontWeight:700,color:S.warnD}}>{fmt(dovuto)}</p>
+                      {Math.abs(dovutoImp-dovuto)>0.01 && <p style={{margin:0,fontSize:9,color:"var(--color-text-secondary)"}}>imponibile {fmt(dovutoImp)}</p>}
                     </div>
                     <div style={{flex:"1 1 120px",padding:"8px 12px",borderRadius:10,background:C.red+"10",border:`1px solid ${C.red}33`}}>
                       <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>DI CUI SCADUTO</p>
@@ -3271,7 +3275,7 @@ In italiano, con numeri ed euro.`,
                         <div key={p.id} style={{display:"flex",gap:8,alignItems:"center",padding:"5px 10px",borderTop:"0.5px solid var(--color-border-tertiary)",fontSize:12,background:p.pagato?"transparent":(isScad?C.red+"08":S.warn+"08")}}>
                           <span style={{minWidth:16}}>{p.pagato?"✅":(isScad?"🔴":"🟡")}</span>
                           <span style={{minWidth:60,fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
-                          <span style={{minWidth:80,fontWeight:600,color:p.pagato?S.good:(isScad?C.red:S.warnD)}}>{fmt(p.importo)}</span>
+                          <span style={{minWidth:80,fontWeight:600,color:p.pagato?S.good:(isScad?C.red:S.warnD)}}>{fmt(p.importo)}{p.imponibile!=null&&Math.abs(Number(p.imponibile)-Number(p.importo))>0.01?<span style={{fontSize:9,fontWeight:500,color:"var(--color-text-secondary)"}}> (imp. {fmt(p.imponibile)})</span>:null}</span>
                           {p.pagato ? (
                             <span style={{minWidth:120,fontSize:11,color:"var(--color-text-secondary)"}}>{`pagata ${p.data_pagamento?fmtD(p.data_pagamento):""}`}</span>
                           ) : (
