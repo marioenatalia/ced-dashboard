@@ -431,13 +431,15 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       // ── FONTE DATI DASHBOARD: deriva dal Foglio (Supabase) se caricato, altrimenti invoices locali ──
       const PERIOD_DEADLINE = { I:"2026-03-31",II:"2026-06-30",III:"2026-09-30",IV:"2026-12-31",GEN:"2026-01-31",FEB:"2026-02-28",MAR:"2026-03-31",APR:"2026-04-30",MAG:"2026-05-31",GIU:"2026-06-30",LUG:"2026-07-31",AGO:"2026-08-31",SET:"2026-09-30",OTT:"2026-10-31",NOV:"2026-11-30",DIC:"2026-12-31",I_SEM:"2026-06-30",II_SEM:"2026-12-31",ANNO:"2026-12-31",BILANCIO:"2026-06-30" };
       const foglioInvoices = (()=>{
+        // etichette locali: PLABEL è dichiarata più avanti nel componente (TDZ)
+        const PERL={I:"I Trim",II:"II Trim",III:"III Trim",IV:"IV Trim",I_SEM:"I Sem",II_SEM:"II Sem",ANNO:"Annuale",GEN:"Gen",FEB:"Feb",MAR:"Mar",APR:"Apr",MAG:"Mag",GIU:"Giu",LUG:"Lug",AGO:"Ago",SET:"Set",OTT:"Ott",NOV:"Nov",DIC:"Dic",BILANCIO:"Bilancio"};
         const out=[];
         foglio.clienti.forEach(c=>{
           const arr=Number(c.arretrati)||0;
-          if(arr>0) out.push({id:c.id+"-ARR",client:c.nome,amount:arr,paid:0,date:"",due:"2025-12-31",status:effStatus({amount:arr,paid:0,due:"2025-12-31"}),notes:[],payments:[],pdfPath:null});
+          if(arr>0) out.push({id:c.id+"-ARR",per:"Arretrati",client:c.nome,amount:arr,paid:0,date:"",due:"2025-12-31",status:effStatus({amount:arr,paid:0,due:"2025-12-31"}),notes:[],payments:[],pdfPath:null});
           foglio.proforme.filter(p=>p.cliente_id===c.id && !p.pagato && (Number(p.importo)||0)>0).forEach(p=>{
             const imp=Number(p.importo)||0; const due=p.scadenza||PERIOD_DEADLINE[p.periodo]||"";
-            out.push({id:p.id,client:c.nome,amount:imp,paid:0,date:p.data_emissione||"",due,status:effStatus({amount:imp,paid:0,due}),notes:[],payments:[],pdfPath:p.pdf_path||null});
+            out.push({id:p.id,per:(PERL[p.periodo]||p.periodo)+" 2026",client:c.nome,amount:imp,paid:0,date:p.data_emissione||"",due,status:effStatus({amount:imp,paid:0,due}),notes:[],payments:[],pdfPath:p.pdf_path||null});
           });
         });
         return out;
@@ -2045,7 +2047,9 @@ In italiano, con numeri ed euro.`,
                     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",gap:5,marginBottom:3,flexWrap:"wrap",alignItems:"center"}}>
-                          <span style={{fontSize:10,color:C.gray,fontFamily:"monospace"}}>{inv.id}</span>
+                          {inv.per
+                            ? <span style={{fontSize:10,padding:"1px 7px",borderRadius:8,background:S.slateD+"15",color:S.slateD,fontWeight:700}}>{inv.per}</span>
+                            : <span style={{fontSize:10,color:C.gray,fontFamily:"monospace"}}>{inv.id}</span>}
                           <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:STATUS[inv.status].bg,color:STATUS[inv.status].c,fontWeight:500}}>{STATUS[inv.status].label}</span>
                           {inv.notes.length>0 && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:C.amberL,color:C.amber}}><i className="ti ti-note" style={{fontSize:10}}/> {inv.notes.length}</span>}
                           {inv.pdfPath && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,background:C.purpleL,color:C.purple,cursor:"pointer"}} onClick={e=>{e.stopPropagation();loadPdfForViewer(inv);}}><i className="ti ti-eye" style={{fontSize:10}}/> PDF {blobMap[inv.id]?"(cached)":"(Yandex)"}</span>}
