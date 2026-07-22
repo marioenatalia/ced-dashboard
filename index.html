@@ -3312,14 +3312,37 @@ In italiano, con numeri ed euro.`,
                           {p.pagato ? (
                             <span style={{minWidth:120,fontSize:11,color:"var(--color-text-secondary)"}}>{`pagata ${p.data_pagamento?fmtD(p.data_pagamento):""}`}</span>
                           ) : (
-                            <span style={{display:"inline-flex",alignItems:"center",gap:4,minWidth:170}}>
-                              <input type="date" value={p.scadenza||""} onChange={async e=>{ const v=e.target.value||null;
+                            <span style={{display:"inline-flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
+                              <span style={{fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>scad.</span>
+                              <input type="date" value={p.scadenza||sc||""} onChange={async e=>{ const v=e.target.value||null;
                                 try{ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v});
                                   setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:v}:x)}));
                                 }catch(err){ alert("Errore salvataggio scadenza: "+err.message); } }}
-                                title="Scadenza personalizzata: i solleciti WhatsApp contano i giorni da questa data (vuota = scadenza standard del periodo)"
+                                title="Scadenza usata dai solleciti WhatsApp: cambiala per spostare (o anticipare) il sollecito di questa proforma"
                                 style={{padding:"2px 5px",borderRadius:5,border:`1px solid ${p.scadenza?S.warnD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:112}}/>
-                              <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{p.scadenza?"":(sc?`std ${fmtD(sc)}`:"")}</span>
+                              {/* scorciatoie: sposta la scadenza in avanti dalla data odierna */}
+                              {[["+15g",15],["+30g",30]].map(([lbl,gg])=>(
+                                <button key={lbl} onClick={async()=>{ const d=new Date(); d.setDate(d.getDate()+gg); const v=d.toISOString().slice(0,10);
+                                  try{ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v});
+                                    setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:v}:x)}));
+                                  }catch(err){ alert("Errore: "+err.message); } }}
+                                  title={`Sposta la scadenza a ${gg} giorni da oggi (rinvia i solleciti)`}
+                                  style={{background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:5,padding:"1px 5px",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:9}}>{lbl}</button>
+                              ))}
+                              {p.scadenza && <button onClick={async()=>{ try{ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:null}); setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:null}:x)})); }catch(err){ alert("Errore: "+err.message); } }} title="Torna alla scadenza standard del periodo" style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:11,padding:0}}>↺</button>}
+                              {(()=>{ // livello di sollecito che scatterebbe oggi con questa scadenza
+                                if(!sc) return null;
+                                const gg=Math.floor((new Date(oggi)-new Date(sc))/86400000);
+                                const tr=cliObj?.trattamento||"normale";
+                                const SOG=tr==="cortese"?[15,45]:tr==="monitorato"?[5,10,20,30]:[7,15,30,45];
+                                const maxL=tr==="cortese"?2:4;
+                                let liv=0; SOG.forEach((s,i)=>{ if(gg>=s && i+1<=maxL) liv=i+1; });
+                                if(cliObj?.no_solleciti) return <span style={{fontSize:9,padding:"1px 6px",borderRadius:5,background:C.redL,color:C.red,fontWeight:600}}>🔕 esclusa</span>;
+                                if(gg<0) return <span style={{fontSize:9,color:"var(--color-text-secondary)"}}>fra {Math.abs(gg)}gg</span>;
+                                if(!liv) return <span style={{fontSize:9,color:"var(--color-text-secondary)"}}>{gg}gg · nessun sollecito</span>;
+                                const COL=[S.warn,S.warn,S.warnD,C.red,C.red];
+                                return <span style={{fontSize:9,padding:"1px 6px",borderRadius:5,background:COL[liv]+"1a",color:COL[liv],fontWeight:700}}>{gg}gg → L{liv}{liv===4?" sospensione":""}</span>;
+                              })()}
                               <button onClick={async()=>{ const v=parseFloat((prompt(`Nuovo importo dovuto per ${PLABEL[p.periodo]||p.periodo} (attuale ${fmt(p.importo)}):`)||"").replace(",",".")); if(!(v>=0)) return;
                                 const motivo=prompt("Motivo della modifica (verrà salvato come nota):")||"";
                                 const nota=((p.note||"")+` · importo modificato da ${fmt(p.importo)} a ${fmt(v)}${motivo?` — ${motivo}`:""} (${fmtD(todayStr())})`).slice(0,500);
