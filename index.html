@@ -1327,13 +1327,21 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         const cliRec=foglio.clienti.find(c=>normName(c.nome)===n0)
           || foglio.clienti.find(c=>{ const k=normName(c.nome); return k.startsWith(n0.slice(0,8))||n0.startsWith(k.slice(0,8)); });
         const candidati=[nomeCliente, ...(cliRec?(foglio.alias||[]).filter(a=>a.cliente_id===cliRec.id).map(a=>a.testo_banca):[])];
-        const matchN=(folderName,n)=>{ const k=normName(folderName); return k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k)); };
-        for(const cand of candidati){
-          const n=normName(cand); if(!n) continue;
-          // 1) dall'anagrafica cartelle già scansionata
-          const hit=(folderClients||[]).find(c=>matchN(c.name,n));
-          if(hit) return {name:hit.name, path:hit.path};
-        }
+        // punteggio SENZA spazi (normName li mantiene: 'ZANETTI L' avrebbe come prefisso
+        // 'ZANETTI ' e aggancerebbe qualsiasi omonimo). 3=esatto, 2=contenuto, 1=prefisso.
+        const tight=s=>normName(s).replace(/ /g,"");
+        const matchScore=(folderName,n)=>{ const k=tight(folderName); if(!k||!n) return 0;
+          if(k===n) return 3;
+          if((n.length>6&&k.includes(n))||(k.length>6&&n.includes(k))) return 2;
+          if(k.startsWith(n.slice(0,8))||n.startsWith(k.slice(0,8))) return 1;
+          return 0; };
+        const cands=candidati.map(tight).filter(Boolean);
+        const best=(items,getName)=>{ let top=null,ts=0;
+          for(const it of items){ for(const n of cands){ const s=matchScore(getName(it),n); if(s>ts){ts=s;top=it;} } }
+          return ts>0?top:null; };
+        // 1) dall'anagrafica cartelle già scansionata (miglior punteggio, non il primo)
+        const hit=best(folderClients||[],c=>c.name);
+        if(hit) return {name:hit.name, path:hit.path};
         // 2) ricerca diretta su Yandex: lettera iniziale di ogni candidato + rami categoria
         if(!ydToken) return null;
         const basi=new Set();
@@ -1341,11 +1349,8 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         ["/MENSILI","/RAGAZZI","/BILANCI"].forEach(b=>basi.add(b));
         for(const base of basi){
           try{ const d=await ydList(ydToken,base);
-            for(const cand of candidati){
-              const n=normName(cand); if(!n) continue;
-              const f=(d._embedded?.items||[]).find(it=>it.type==="dir"&&matchN(it.name,n));
-              if(f) return {name:f.name, path:f.path};
-            }
+            const f=best((d._embedded?.items||[]).filter(it=>it.type==="dir"),it=>it.name);
+            if(f) return {name:f.name, path:f.path};
           }catch(e){}
         }
         return null;
@@ -1419,14 +1424,24 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         .replace(/\b(DI|DEL|DELLA|DELLE|DEI|E|C|CO|SRL|SRLS|SNC|SAS|SS|SPA|SOCIETA|DITTA|IMPRESA|FRATELLI|F\.?LLI)\b/g," ")
         .replace(/\s+/g,"");
       const matchClienteBanca = (nome) => {
-        const n=normName(nome); if(!n) return null;
-        const al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca); return t===n || (t.length>6&&n.includes(t)) || (n.length>6&&t.includes(n)); });
+        // confronto SENZA spazi e per punteggio: il vecchio prefisso a 8 caratteri
+        // includeva lo spazio ("ZANETTI ") e agganciava l'omonimo sbagliato
+        const nt=normName(nome).replace(/ /g,""); if(!nt) return null;
+        const al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca).replace(/ /g,""); return t===nt || (t.length>6&&nt.includes(t)) || (nt.length>6&&t.includes(nt)); });
         if(al){ const c=foglio.clienti.find(x=>x.id===al.cliente_id); if(c) return c; }
         const nc=normCore(nome);
-        return foglio.clienti.find(c=>{ const k=normName(c.nome); if(!k) return false;
-          if(k===n || k.startsWith(n.slice(0,8)) || n.startsWith(k.slice(0,8)) || (n.length>6&&k.includes(n)) || (k.length>6&&n.includes(k))) return true;
-          const kc=normCore(c.nome); if(!kc||!nc) return false;
-          return kc===nc || (kc.length>7&&nc.startsWith(kc)) || (nc.length>7&&kc.startsWith(nc)); })||null;
+        let top=null, ts=0;
+        for(const c of foglio.clienti){
+          const k=normName(c.nome).replace(/ /g,""); if(!k) continue;
+          let s=0;
+          if(k===nt) s=4;
+          else if((nt.length>6&&k.includes(nt))||(k.length>6&&nt.includes(k))) s=3;
+          else { const kc=normCore(c.nome);
+            if(kc&&nc&&(kc===nc||(kc.length>7&&nc.startsWith(kc))||(nc.length>7&&kc.startsWith(nc)))) s=2;
+            else if(k.startsWith(nt.slice(0,8))||nt.startsWith(k.slice(0,8))) s=1; }
+          if(s>ts){ ts=s; top=c; }
+        }
+        return top;
       };
       // Collega un movimento a un cliente SENZA registrare il pagamento:
       // memorizza l'alias banca->cliente e abbina la riga (poi si conferma normalmente)
