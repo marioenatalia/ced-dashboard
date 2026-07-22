@@ -382,6 +382,8 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [scanStatus, setScanStatus] = useState("idle");
       const [excludeEx, setExcludeEx]   = useState(()=>LS.get("ced_exclude_ex",true));
       const [cliFilter, setCliFilter]   = useState("");
+      const [showScad, setShowScad]     = useState(false);   // scadenzario: scadenze proforme raggruppate per cliente
+      const [foglioCerca, setFoglioCerca] = useState("");    // ricerca cliente nella griglia Foglio
       const [cliAiLoading, setCliAiLoading] = useState(null);
       const [cliFiles, setCliFiles]     = useState({});   // name -> {loading, open:[], paid:[]}
       const [excelStatus, setExcelStatus] = useState(()=>LS.raw("ced_excel_at")?("done"):"idle");
@@ -1340,6 +1342,30 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         if(!cliFiles[f.name]) loadClientFiles(f);
       };
 
+      // Sconto rapido dalla riga di un pagamento: agisce sulla proforma collegata
+      // (o sulla più vecchia aperta del cliente) e aggiorna il dovuto ovunque.
+      const applicaScontoRapido = async(pag, cli)=>{
+        if(!cli){ alert("Cliente non trovato per questo pagamento."); return; }
+        const pf = foglio.proforme.find(x=>x.id===pag.proforma_id && !x.pagato && Number(x.importo)>0)
+          || foglio.proforme.filter(x=>x.cliente_id===cli.id && !x.pagato && Number(x.importo)>0)
+             .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")))[0];
+        if(!pf){ alert(`${cli.nome} non ha proforme aperte: niente da scontare.`); return; }
+        const imp=Number(pf.importo)||0;
+        const v=parseFloat((prompt(`Sconto per ${cli.nome} su ${PLABEL[pf.periodo]||pf.periodo} (residuo ${fmt(imp)}):\n= residuo → proforma SALDATA con sconto\n< residuo → sconto parziale, debito ridotto`)||"").replace(",","."));
+        if(!(v>0)) return;
+        const motivo=prompt("Motivo dello sconto (nota, es. pagamento in contanti):")||"";
+        try{
+          const pieno=v>=imp-0.01;
+          const patch=pieno
+            ? {pagato:true,data_pagamento:todayStr(),note:((pf.note||"")+` · saldata con sconto ${fmt(v)}${motivo?` — ${motivo}`:""} (${fmtD(todayStr())})`).slice(0,500)}
+            : {importo:Math.round((imp-v)*100)/100,note:((pf.note||"")+` · sconto ${fmt(v)}${motivo?` — ${motivo}`:""}, debito ridotto a ${fmt(imp-v)} (${fmtD(todayStr())})`).slice(0,500)};
+          await sbUpdate("proforme",`id=eq.${pf.id}`,patch);
+          const ins=await sbInsert("pagamenti",[{cliente_id:cli.id,proforma_id:pf.id,data:todayStr(),importo:v,fonte:"sconto",descrizione:(`Sconto su ${PLABEL[pf.periodo]||pf.periodo}${motivo?` — 📝 ${motivo}`:""}`).slice(0,300),mov_key:`SCONTO|${pf.id}|${todayStr()}|${v}|${Date.now()}`}]);
+          setFoglio(f=>({...f,pagamenti:[ins[0],...(f.pagamenti||[])],proforme:f.proforme.map(x=>x.id===pf.id?{...x,...patch}:x)}));
+          setIncMsg(`✓ Sconto ${fmt(v)} registrato per ${cli.nome}${pieno?` · ${PLABEL[pf.periodo]||pf.periodo} SALDATA con sconto`:` · residuo ${fmt(Math.round((imp-v)*100)/100)}`}`);
+        }catch(e){ setIncMsg("Errore sconto: "+e.message); }
+      };
+
       // ── Modifica / eliminazione pagamenti registrati ──
       const salvaEditPag = async()=>{
         if(!editPag) return;
@@ -1986,7 +2012,21 @@ In italiano, con numeri ed euro.`,
                 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cerca cliente o numero proforma..." style={{width:"100%",padding:"9px 34px 9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
                 {search && <button onClick={()=>setSearch("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:15}}><i className="ti ti-x"/></button>}
               </div>
-              {search && <p style={{margin:"0 0 10px",fontSize:11,color:"var(--color-text-secondary)"}}>{filtered.length} risultati per "{search}"</p>}
+              {search && <p style={{margin:"0 0 6px",fontSize:11,color:"var(--color-text-secondary)"}}>{filtered.length} risultati per "{search}"</p>}
+              {search && (()=>{
+                // la ricerca guarda anche l'anagrafica del Foglio: clic sul nome = scheda completa
+                const qq=search.trim().toLowerCase();
+                const hits=foglio.clienti.filter(c=>c.nome.toLowerCase().includes(qq)).slice(0,8);
+                if(!hits.length) return null;
+                return (
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
+                  <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Clienti nel Foglio:</span>
+                  {hits.map(c=>{ const open=foglio.proforme.filter(p=>p.cliente_id===c.id&&!p.pagato&&Number(p.importo)>0); const dov=open.reduce((s,p)=>s+Number(p.importo),0)+(Number(c.arretrati)||0);
+                    return <button key={c.id} onClick={()=>openClientPdfs(c.nome)} title="Apri la scheda completa (proforme, PDF, scadenze, sconti)" style={{padding:"5px 10px",borderRadius:16,background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,fontSize:12,fontWeight:600,cursor:"pointer"}}>📂 {c.nome} {dov>0?`· ${fmt(dov)}`:"· in regola"}</button>;
+                  })}
+                </div>
+                );
+              })()}
               <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
                 {["tutti","pagato","parziale","attesa","scaduto","storico"].map(s=>{
                   const col = s==="tutti"?C.blue : s==="storico"?C.coral : STATUS[s]?.c;
@@ -2095,16 +2135,19 @@ In italiano, con numeri ed euro.`,
                 const elapsed=per=>{ const m=DEADM[per]; if(!m) return false; return _now > new Date(2026,m,0,23,59,59); };
                 // la scadenza manuale (p.scadenza) ha la precedenza sul periodo standard
                 const scadutaP=p=> p.scadenza ? (_now > new Date(p.scadenza+"T23:59:59")) : elapsed(p.periodo);
-                const rows=foglio.clienti.map(c=>{
+                const rowsAll=foglio.clienti.map(c=>{
                   const pfs=foglio.proforme.filter(p=>p.cliente_id===c.id);
                   const arr=Number(c.arretrati)||0;
                   const unpaid=pfs.filter(p=>!p.pagato);
                   const dovuto=arr+unpaid.reduce((s,p)=>s+(Number(p.importo)||0),0);
                   const scaduto=arr+unpaid.filter(scadutaP).reduce((s,p)=>s+(Number(p.importo)||0),0);
                   return {c,pfs,dovuto,scaduto,arr};
-                }).filter(r=>r.dovuto>0).sort((a,b)=>b.dovuto-a.dovuto);
+                });
+                const rows=rowsAll.filter(r=>r.dovuto>0).sort((a,b)=>b.dovuto-a.dovuto);
                 const q=cliFilter.trim().toLowerCase();
-                const list=q?rows.filter(r=>r.c.nome.toLowerCase().includes(q)):rows;
+                // con la ricerca attiva si vede TUTTO (anche chi ha dovuto zero): serve per
+                // controllare pagato ed emissioni, non solo i debitori
+                const list=q?rowsAll.filter(r=>r.c.nome.toLowerCase().includes(q)).sort((a,b)=>b.dovuto-a.dovuto||a.c.nome.localeCompare(b.c.nome)):rows;
                 const totDov=rows.reduce((s,r)=>s+r.dovuto,0), totScad=rows.reduce((s,r)=>s+r.scaduto,0);
                 return (<>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
@@ -2112,10 +2155,50 @@ In italiano, con numeri ed euro.`,
                     <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>DOVUTO TOTALE</p><p style={{margin:0,fontSize:18,fontWeight:700,color:S.warn}}>{fmt(totDov)}</p></div>
                     <div style={{background:"var(--color-surface)",border:`1px solid ${S.warnD}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warnD,fontWeight:600}}>SCADUTO</p><p style={{margin:0,fontSize:18,fontWeight:700,color:S.warnD}}>{fmt(totScad)}</p></div>
                   </div>
-                  <div style={{position:"relative",marginBottom:10}}>
-                    <i className="ti ti-search" style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,color:"var(--color-text-secondary)"}}/>
-                    <input value={cliFilter} onChange={e=>setCliFilter(e.target.value)} placeholder="Cerca cliente..." style={{width:"100%",padding:"9px 34px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                  <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                    <div style={{position:"relative",flex:1}}>
+                      <input value={cliFilter} onChange={e=>setCliFilter(e.target.value)} placeholder="Cerca cliente (tutti, anche senza dovuto)..." style={{width:"100%",padding:"9px 12px",borderRadius:10,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:13,boxSizing:"border-box"}}/>
+                      {cliFilter && <button onClick={()=>setCliFilter("")} style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:14}}>✕</button>}
+                    </div>
+                    <button onClick={()=>setShowScad(s=>!s)} style={{padding:"9px 14px",background:showScad?S.warnD:"var(--color-surface)",color:showScad?"#fff":S.warnD,border:`1px solid ${S.warnD}55`,borderRadius:10,fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📅 Scadenzario</button>
                   </div>
+                  {showScad && (()=>{
+                    // tutte le proforme APERTE raggruppate per cliente, con scadenza modificabile
+                    const grp=rowsAll.filter(r=>r.pfs.some(p=>!p.pagato&&Number(p.importo)>0))
+                      .map(r=>({...r,open:r.pfs.filter(p=>!p.pagato&&Number(p.importo)>0).sort((a,b)=>String(a.scadenza||PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(b.scadenza||PERIOD_DEADLINE[b.periodo]||"9999")))}))
+                      .filter(r=>!q||r.c.nome.toLowerCase().includes(q))
+                      .sort((a,b)=>String(a.open[0].scadenza||PERIOD_DEADLINE[a.open[0].periodo]||"9999").localeCompare(String(b.open[0].scadenza||PERIOD_DEADLINE[b.open[0].periodo]||"9999")));
+                    return (
+                    <div style={{background:"var(--color-surface)",border:`1px solid ${S.warnD}44`,borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginBottom:12,maxHeight:480,overflowY:"auto"}}>
+                      <p style={{margin:"0 0 4px",fontSize:13,fontWeight:700,color:S.warnD}}>📅 Scadenzario — proforme aperte per cliente ({grp.length} clienti)</p>
+                      <p style={{margin:"0 0 8px",fontSize:10,color:"var(--color-text-secondary)"}}>Imposta o cambia la data: i solleciti WhatsApp contano i giorni di ritardo da quella. Vuota = scadenza standard del periodo. Ordinato per prossima scadenza.</p>
+                      {grp.map(r=>(
+                        <div key={r.c.id} style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"6px 0"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <b style={{fontSize:12,flex:1,cursor:"pointer"}} onClick={()=>openClientPdfs(r.c.nome)}>📂 {r.c.nome}</b>
+                            <span style={{fontSize:11,fontWeight:700,color:S.warn}}>{fmt(r.dovuto)}</span>
+                          </div>
+                          <div style={{display:"flex",gap:10,flexWrap:"wrap",padding:"3px 0 0 16px"}}>
+                            {r.open.map(p=>{ const std=PERIOD_DEADLINE[p.periodo]; return (
+                              <span key={p.id} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11}}>
+                                <span style={{fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
+                                <span style={{color:S.warnD,fontWeight:600}}>{fmt(p.importo)}</span>
+                                <input type="date" value={p.scadenza||""} onChange={async e=>{ const v=e.target.value||null;
+                                  try{ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v});
+                                    setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===p.id?{...x,scadenza:v}:x)}));
+                                  }catch(err){ alert("Errore: "+err.message); } }}
+                                  title={"Scadenza personalizzata (standard: "+(std?fmtD(std):"—")+")"}
+                                  style={{padding:"2px 4px",borderRadius:5,border:`1px solid ${p.scadenza?S.warnD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:112}}/>
+                                {!p.scadenza&&std&&<span style={{fontSize:9,color:"var(--color-text-secondary)"}}>std {fmtD(std)}</span>}
+                              </span>
+                            );})}
+                          </div>
+                        </div>
+                      ))}
+                      {grp.length===0&&<p style={{fontSize:12,color:"var(--color-text-secondary)"}}>Nessuna proforma aperta{q?` per "${cliFilter}"`:""}.</p>}
+                    </div>
+                    );
+                  })()}
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
                     {list.map(r=>{ const open=selected?.__cli===r.c.id; return (
                       <div key={r.c.id} style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:11,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
@@ -2153,7 +2236,7 @@ In italiano, con numeri ed euro.`,
                         )}
                       </div>
                     );})}
-                    {list.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:18}}>Nessun cliente con dovuto{q?` per "${cliFilter}"`:""}.</p>}
+                    {list.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:18}}>{q?`Nessun cliente trovato per "${cliFilter}".`:"Nessun cliente con dovuto (cerca per vedere anche quelli in regola)."}</p>}
                   </div>
                 </>);
               })() : folderClients.length>0 ? (()=>{
@@ -2279,7 +2362,10 @@ In italiano, con numeri ed euro.`,
               {sbReady() && (()=>{
                 const cats=[["focus","Focus (trim.)"],["altri","Altri (mensili)"],["ragazzi","Ragazzi"],["bilancio","Bilancio"],["nuovi","Nuovi"]];
                 const periods=PERIODI[foglioCat];
-                const clienti=foglio.clienti.filter(c=>c.categoria===foglioCat);
+                const fq=foglioCerca.trim().toLowerCase();
+                const clienti=foglio.clienti.filter(c=>c.categoria===foglioCat && (!fq||c.nome.toLowerCase().includes(fq)));
+                // corrispondenze nelle altre categorie (per saltarci con un clic)
+                const altrove=fq?foglio.clienti.filter(c=>c.categoria!==foglioCat && c.nome.toLowerCase().includes(fq)):[];
                 const pf=(cid,per)=>foglio.proforme.find(p=>p.cliente_id===cid&&p.periodo===per);
                 const cliDue=c=>{ let d=Number(c.arretrati)||0; foglio.proforme.forEach(p=>{ if(p.cliente_id===c.id&&!p.pagato) d+=Number(p.importo)||0; }); return d; };
                 const totDue=clienti.reduce((s,c)=>s+cliDue(c),0);
@@ -2330,8 +2416,19 @@ In italiano, con numeri ed euro.`,
                     {cats.map(([k,l])=>(
                       <button key={k} onClick={()=>setFoglioCat(k)} style={{padding:"5px 12px",borderRadius:20,border:foglioCat===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:foglioCat===k?S.slateD+"15":"transparent",color:foglioCat===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:foglioCat===k?600:400}}>{l} ({foglio.clienti.filter(c=>c.categoria===k).length})</button>
                     ))}
+                    <div style={{position:"relative"}}>
+                      <input value={foglioCerca} onChange={e=>setFoglioCerca(e.target.value)} placeholder="Cerca cliente..." style={{width:190,padding:"6px 24px 6px 10px",borderRadius:8,border:`1px solid ${foglioCerca?S.slateD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                      {foglioCerca && <button onClick={()=>setFoglioCerca("")} style={{position:"absolute",right:5,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:13}}>✕</button>}
+                    </div>
                     <span style={{marginLeft:"auto",fontSize:12,color:"var(--color-text-secondary)"}}>Da incassare: <b style={{color:S.warn}}>{fmt(totDue)}</b></span>
                   </div>
+                  {altrove.length>0 && (
+                    <p style={{margin:"0 0 8px",fontSize:11,color:"var(--color-text-secondary)"}}>Trovati anche in altre sezioni:{" "}
+                      {altrove.slice(0,6).map(c=>(
+                        <button key={c.id} onClick={()=>setFoglioCat(c.categoria)} style={{margin:"0 4px 2px 0",padding:"2px 9px",borderRadius:12,background:S.slateD+"12",color:S.slateD,border:`1px solid ${S.slateD}33`,fontSize:11,fontWeight:600,cursor:"pointer"}}>{c.nome} → {c.categoria}</button>
+                      ))}
+                    </p>
+                  )}
                   <div style={{overflowX:"auto",background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,boxShadow:"var(--shadow-card)"}}>
                     <table style={{borderCollapse:"collapse",width:"100%",fontSize:12,minWidth:600}}>
                       <thead>
@@ -2553,6 +2650,7 @@ In italiano, con numeri ed euro.`,
                         <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span>{(p.descrizione||"").includes("📝")&&<span style={{fontSize:10,color:S.warnD,fontStyle:"italic"}} title={p.descrizione}> · {p.descrizione.slice(p.descrizione.indexOf("📝"),p.descrizione.indexOf("📝")+60)}</span>}{(p.descrizione||"").includes("solo per record")&&<span style={{fontSize:9,padding:"0 5px",borderRadius:5,background:S.warnD+"18",color:S.warnD,fontWeight:600,marginLeft:4}}>RECORD</span>}</span>
                         <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
                         {c && <button onClick={()=>openClientPdfs(c.nome)} title="Proforme PDF del cliente" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:6,padding:"2px 7px",color:C.purple,cursor:"pointer",fontSize:12}}>📄</button>}
+                        {p.fonte!=="sconto" && <button onClick={()=>applicaScontoRapido(p,c)} title="Aggiungi uno sconto (anche parziale) collegato a questo pagamento: riduce o salda la proforma e aggiorna il dovuto del cliente" style={{background:S.warnD+"14",border:`1px solid ${S.warnD}44`,borderRadius:6,padding:"2px 7px",color:S.warnD,cursor:"pointer",fontSize:12}}>🏷️</button>}
                         <button onClick={()=>setEditPag(inEdit?null:{id:p.id,data:p.data||"",importo:p.importo,fonte:p.fonte,descrizione:p.descrizione||""})} title="Modifica pagamento" style={{background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"2px 7px",color:S.slateD,cursor:"pointer",fontSize:12}}>✏️</button>
                         <button onClick={()=>eliminaPag(p)} title="Elimina pagamento" style={{background:C.redL,border:`1px solid ${C.red}33`,borderRadius:6,padding:"2px 7px",color:C.red,cursor:"pointer",fontSize:12}}>🗑</button>
                       </div>
