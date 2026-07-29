@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1250" width="1000" height="1250" preserveAspectRatio="xMidYMid slice" role="img">
+  <defs>
+    <linearGradient id="bg22" x1="0" y1="0" x2=".25" y2="1">
+      <stop offset="0%" stop-color="#F0E7DA"/><stop offset="100%" stop-color="#DFCFBB"/>
+    </linearGradient>
+    <radialGradient id="glow22" cx="50%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#F7DFB4" stop-opacity=".9"/>
+      <stop offset="45%" stop-color="#F7DFB4" stop-opacity=".26"/>
+      <stop offset="100%" stop-color="#F7DFB4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim22" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#000" stop-opacity=".35"/>
+      <stop offset="30%" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset="70%" stop-color="#fff" stop-opacity=".04"/>
+      <stop offset="100%" stop-color="#000" stop-opacity=".38"/>
+    </linearGradient>
+    <radialGradient id="fl22" cx="50%" cy="70%" r="60%">
+      <stop offset="0%" stop-color="#FFF7E2"/><stop offset="45%" stop-color="#FFD98A"/>
+      <stop offset="100%" stop-color="#E9A94B" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vig22" cx="50%" cy="50%" r="72%">
+      <stop offset="55%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000" stop-opacity=".5"/>
+    </radialGradient>
+    <filter id="soft22" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="grain22"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="3" seed="22"/><feColorMatrix type="saturate" values="0"/></filter>
+  </defs>
+  <rect width="1000" height="1250" fill="url(#bg22)"/>
+  <rect width="1000" height="1250" fill="url(#glow22)"/>
+  <ellipse cx="230" cy="426" rx="93.6" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="152" y="280" width="156" height="150" rx="12" fill="#E4D3BC"/>
+  <rect x="152" y="280" width="156" height="150" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="230" cy="280" rx="78" ry="20" fill="#fff" opacity=".22"/>
+  <ellipse cx="500" cy="426" rx="69.6" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="442" y="320" width="116" height="110" rx="12" fill="#C9A981"/>
+  <rect x="442" y="320" width="116" height="110" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="500" cy="320" rx="58" ry="15" fill="#fff" opacity=".22"/>
+  <ellipse cx="770" cy="426" rx="79.2" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="704" y="302" width="132" height="128" rx="12" fill="#EDE0CC"/>
+  <rect x="704" y="302" width="132" height="128" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="770" cy="302" rx="66" ry="17" fill="#fff" opacity=".22"/>
+  <rect x="60" y="430" width="880" height="12" rx="3" fill="#B99B76" opacity=".55"/>
+  <rect x="60" y="442" width="880" height="10" fill="#000" opacity=".10"/>
+  <ellipse cx="230" cy="776" rx="79.2" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="164" y="658" width="132" height="122" rx="12" fill="#D9BFA2"/>
+  <rect x="164" y="658" width="132" height="122" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="230" cy="658" rx="66" ry="17" fill="#fff" opacity=".22"/>
+  <ellipse cx="500" cy="776" rx="100.8" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="416" y="622" width="168" height="158" rx="12" fill="#EFE3D2"/>
+  <rect x="416" y="622" width="168" height="158" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="500" cy="622" rx="84" ry="22" fill="#fff" opacity=".22"/>
+  <ellipse cx="770" cy="776" rx="62.4" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="718" y="684" width="104" height="96" rx="12" fill="#C08A4E"/>
+  <rect x="718" y="684" width="104" height="96" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="770" cy="684" rx="52" ry="14" fill="#fff" opacity=".22"/>
+  <rect x="60" y="780" width="880" height="12" rx="3" fill="#B99B76" opacity=".55"/>
+  <rect x="60" y="792" width="880" height="10" fill="#000" opacity=".10"/>
+  <ellipse cx="230" cy="1116" rx="72.0" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="170" y="1004" width="120" height="116" rx="12" fill="#EADCC8"/>
+  <rect x="170" y="1004" width="120" height="116" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="230" cy="1004" rx="60" ry="16" fill="#fff" opacity=".22"/>
+  <ellipse cx="500" cy="1116" rx="88.8" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="426" y="980" width="148" height="140" rx="12" fill="#D3B28C"/>
+  <rect x="426" y="980" width="148" height="140" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="500" cy="980" rx="74" ry="19" fill="#fff" opacity=".22"/>
+  <ellipse cx="770" cy="1116" rx="74.39999999999999" ry="14" fill="#0B0806" opacity=".18" filter="url(#soft22)"/>
+  <rect x="708" y="1000" width="124" height="120" rx="12" fill="#E7D3CB"/>
+  <rect x="708" y="1000" width="124" height="120" rx="12" fill="url(#rim22)"/>
+  <ellipse cx="770" cy="1000" rx="62" ry="16" fill="#fff" opacity=".22"/>
+  <rect x="60" y="1120" width="880" height="12" rx="3" fill="#B99B76" opacity=".55"/>
+  <rect x="60" y="1132" width="880" height="10" fill="#000" opacity=".10"/>
+  <rect width="1000" height="1250" filter="url(#grain22)" opacity=".08" style="mix-blend-mode:overlay"/>
+</svg>

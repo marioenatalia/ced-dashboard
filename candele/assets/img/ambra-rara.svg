@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000" role="img">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#F1E5D8"/><stop offset="100%" stop-color="#DFCAB2"/>
+    </linearGradient>
+    <radialGradient id="glow4" cx="50%" cy="42%" r="52%">
+      <stop offset="0%" stop-color="#F2CE97" stop-opacity=".85"/>
+      <stop offset="60%" stop-color="#F2CE97" stop-opacity=".18"/>
+      <stop offset="100%" stop-color="#F2CE97" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wax4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#000" stop-opacity=".16"/>
+      <stop offset="22%" stop-color="#fff" stop-opacity=".30"/>
+      <stop offset="55%" stop-color="#fff" stop-opacity=".05"/>
+      <stop offset="100%" stop-color="#000" stop-opacity=".20"/>
+    </linearGradient>
+    <radialGradient id="flame4" cx="50%" cy="70%" r="60%">
+      <stop offset="0%" stop-color="#FFF6DA"/><stop offset="45%" stop-color="#FFD98A"/>
+      <stop offset="100%" stop-color="#E9A94B" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft4" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="grain4" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="4"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+  </defs>
+  <rect width="800" height="1000" fill="url(#bg4)"/>
+  <rect width="800" height="1000" fill="url(#glow4)"/>
+  <ellipse cx="400" cy="752" rx="210.0" ry="30" fill="#3A2E24" opacity=".18" filter="url(#soft4)"/>
+  <rect x="232" y="360" width="336" height="370" rx="18" fill="#E8C79B" opacity=".92"/>
+  <rect x="250" y="430" width="300" height="282" rx="12" fill="#C08A4E" opacity=".85"/>
+  <line x1="260" y1="370" x2="260" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="288" y1="370" x2="288" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="316" y1="370" x2="316" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="344" y1="370" x2="344" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="372" y1="370" x2="372" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="400" y1="370" x2="400" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="428" y1="370" x2="428" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="456" y1="370" x2="456" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="484" y1="370" x2="484" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="512" y1="370" x2="512" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <line x1="540" y1="370" x2="540" y2="720" stroke="#fff" stroke-opacity=".20" stroke-width="5"/>
+  <rect x="232" y="360" width="336" height="370" rx="18" fill="url(#wax4)"/>
+  <ellipse cx="400" cy="360" rx="168" ry="30" fill="#E8C79B"/>
+  <ellipse cx="400" cy="360" rx="154" ry="22" fill="#000" opacity=".14"/>
+  <ellipse cx="400" cy="432" rx="148" ry="22" fill="#C08A4E"/>
+  <ellipse cx="400" cy="432" rx="148" ry="22" fill="#fff" opacity=".16"/>
+  <path d="M 342 426 q 4 -8 0 -18" stroke="#4A3B2E" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".75"/>
+  <ellipse cx="342" cy="391" rx="42" ry="74" fill="url(#flame4)" opacity=".55"/>
+  <path d="M 342 368.4 C 358.0 390.7, 354.0 418.0, 342 418.0 C 330.0 418.0, 326.0 390.7, 342 368.4 Z" fill="#FFE0A0" opacity=".95"/>
+  <path d="M 342 387.2 C 348.4 403.1, 346.8 415.5, 342 415.5 C 337.2 415.5, 335.6 403.1, 342 387.2 Z" fill="#FFFBEF" opacity=".9"/>
+  <path d="M 458 426 q 4 -8 0 -18" stroke="#4A3B2E" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".75"/>
+  <ellipse cx="458" cy="391" rx="42" ry="74" fill="url(#flame4)" opacity=".55"/>
+  <path d="M 458 368.4 C 474.0 390.7, 470.0 418.0, 458 418.0 C 446.0 418.0, 442.0 390.7, 458 368.4 Z" fill="#FFE0A0" opacity=".95"/>
+  <path d="M 458 387.2 C 464.4 403.1, 462.8 415.5, 458 415.5 C 453.2 415.5, 451.6 403.1, 458 387.2 Z" fill="#FFFBEF" opacity=".9"/>
+  <rect width="800" height="1000" filter="url(#grain4)" opacity=".05" style="mix-blend-mode:multiply"/>
+  <rect x="0" y="0" width="800" height="1000" fill="none"/>
+</svg>
