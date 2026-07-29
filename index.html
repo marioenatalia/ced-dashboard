@@ -2779,6 +2779,38 @@ In italiano, con numeri ed euro.`,
                 </div>
                 );
               })()}
+
+              {/* Ripartizioni: totali nostri vs ogni collaboratore (es. Studio Conti) */}
+              {(foglio.pagamenti||[]).some(p=>Number(p.quota_esterna)>0) && (()=>{
+                const paid=foglio.pagamenti.filter(p=>p.fonte!=="sconto");
+                const lordo=paid.reduce((s,p)=>s+(Number(p.importo)||0),0);
+                const perCollab={};
+                paid.forEach(p=>{ const q=Number(p.quota_esterna)||0; if(q>0){ const k=p.esterno||"collaboratore"; perCollab[k]=(perCollab[k]||0)+q; } });
+                const girato=Object.values(perCollab).reduce((s,v)=>s+v,0);
+                const collabs=Object.entries(perCollab).sort((a,b)=>b[1]-a[1]);
+                return (
+                <div style={{background:"var(--color-surface)",border:`1px solid ${C.purple}44`,borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginTop:12}}>
+                  <p style={{margin:"0 0 8px",fontSize:13,fontWeight:600,color:C.purple}}>✂️ Ripartizione incassi</p>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <div style={{flex:"1 1 150px",padding:"8px 12px",borderRadius:10,background:S.good+"12",border:`1px solid ${S.good}33`}}>
+                      <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>NOSTRO NETTO</p>
+                      <p style={{margin:0,fontSize:17,fontWeight:700,color:S.good}}>{fmt(lordo-girato)}</p>
+                    </div>
+                    {collabs.map(([nome,tot])=>(
+                      <div key={nome} style={{flex:"1 1 150px",padding:"8px 12px",borderRadius:10,background:C.purpleL,border:`1px solid ${C.purple}33`}}>
+                        <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>{nome.toUpperCase()}</p>
+                        <p style={{margin:0,fontSize:17,fontWeight:700,color:C.purple}}>{fmt(tot)}</p>
+                      </div>
+                    ))}
+                    <div style={{flex:"1 1 130px",padding:"8px 12px",borderRadius:10,background:"var(--color-background-secondary)"}}>
+                      <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>LORDO INCASSATO</p>
+                      <p style={{margin:0,fontSize:15,fontWeight:700}}>{fmt(lordo)}</p>
+                    </div>
+                  </div>
+                  <p style={{margin:"8px 0 0",fontSize:10,color:"var(--color-text-secondary)"}}>Somma di quanto trattenuto da ciascun collaboratore sugli incassi divisi (✂️). Il resto è netto nostro.</p>
+                </div>
+                );
+              })()}
             </div>
           )}
 
@@ -2869,19 +2901,19 @@ In italiano, con numeri ed euro.`,
               const wb=new ExcelJS.Workbook();
               for(const m of mesi){
                 const ws=wb.addWorksheet(meseLabel(m).slice(0,30));
-                ws.columns=[{header:"Data",width:12},{header:"Cliente",width:42},{header:"Tipologia",width:12},{header:"Importo €",width:12},{header:"Note / descrizione",width:60}];
-                ws.getRow(1).font={bold:true}; ws.getRow(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF334155"}}; ws.getRow(1).font={bold:true,color:{argb:"FFFFFFFF"}};
-                let totMese=0;
+                ws.columns=[{header:"Data",width:12},{header:"Cliente",width:42},{header:"Tipologia",width:12},{header:"Importo €",width:12},{header:"Nostro €",width:12},{header:"Collaboratore",width:16},{header:"Quota collab. €",width:14},{header:"Note / descrizione",width:60}];
+                ws.getRow(1).fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF334155"}}; ws.getRow(1).font={bold:true,color:{argb:"FFFFFFFF"}};
+                let totMese=0, totNostro=0, totGirato=0;
                 for(const f of Object.keys(FONTI)){
                   const rows=byMonth[m].filter(p=>fk(p.fonte)===f).sort((a,b)=>String(a.data).localeCompare(String(b.data)));
                   if(!rows.length) continue;
-                  let tot=0;
-                  rows.forEach(p=>{ ws.addRow([p.data?fmtD(p.data):"",p.cliNome,FONTI[f][1],Number(p.importo)||0,(p.descrizione||"")]); tot+=Number(p.importo)||0; });
-                  const tr=ws.addRow(["","TOTALE "+FONTI[f][1].toUpperCase(),"",tot,""]); tr.font={bold:true};
-                  if(f!=="sconto") totMese+=tot;
+                  let tot=0, nostro=0, girato=0;
+                  rows.forEach(p=>{ const imp=Number(p.importo)||0; const q=Number(p.quota_esterna)||0; ws.addRow([p.data?fmtD(p.data):"",p.cliNome,FONTI[f][1],imp,imp-q,q>0?(p.esterno||"collab."):"",q>0?q:"",(p.descrizione||"")]); tot+=imp; nostro+=imp-q; girato+=q; });
+                  const tr=ws.addRow(["","TOTALE "+FONTI[f][1].toUpperCase(),"",tot,nostro,"",girato||"",""]); tr.font={bold:true};
+                  if(f!=="sconto"){ totMese+=tot; totNostro+=nostro-((f==="sconto")?0:0); totGirato+=girato; }
                 }
-                const gr=ws.addRow(["","TOTALE INCASSATO "+meseLabel(m).toUpperCase(),"",totMese,"(sconti esclusi)"]); gr.font={bold:true,color:{argb:"FF15803D"}};
-                ws.getColumn(4).numFmt='#,##0.00';
+                const gr=ws.addRow(["","TOTALE INCASSATO "+meseLabel(m).toUpperCase(),"",totMese,totNostro,"",totGirato||"","(sconti esclusi · Nostro = al netto delle quote collaboratori)"]); gr.font={bold:true,color:{argb:"FF15803D"}};
+                [4,5,7].forEach(ci=>{ ws.getColumn(ci).numFmt='#,##0.00'; });
               }
               const buf=await wb.xlsx.writeBuffer();
               const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([buf])); a.download=`Registro_incassi_${todayStr()}.xlsx`; a.click();
