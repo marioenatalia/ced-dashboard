@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collezione · Vera Candles</title>
+<meta name="description" content="Tutte le candele artigianali Vera Candles: Opere Uniche, Signature e Rituali. Edizioni numerate colate a mano, cera di soia e cera d’api, vasi in vetro soffiato, ceramica e alabastro.">
+<meta name="theme-color" content="#FBF8F4">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Jost:wght@200;300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<header class="shop-head">
+  <div class="wrap">
+    <div class="reveal" style="max-width:720px">
+      <p class="eyebrow">La collezione</p>
+      <h1 style="font-size:clamp(2.6rem,6vw,4.4rem)">Ogni pezzo ha un numero,<br>e una volta finito non torna.</h1>
+      <hr class="rule">
+      <p class="lede">Tre famiglie: le <strong style="font-weight:400">Opere Uniche</strong>, sculture da guardare accese; la linea <strong style="font-weight:400">Signature</strong>, i formati che usiamo ogni giorno; i <strong style="font-weight:400">Rituali</strong>, pezzi pensati per la tavola e per le occasioni.</p>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="filters reveal">
+    <button class="chip is-on" data-filter="Tutte">Tutte</button>
+    <button class="chip" data-filter="Opere Uniche">Opere Uniche</button>
+    <button class="chip" data-filter="Signature">Signature</button>
+    <button class="chip" data-filter="Rituali">Rituali</button>
+    <span class="filters__spacer"></span>
+    <span style="font-size:.688rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)" data-count></span>
+    <label class="sr-only" for="sort">Ordina</label>
+    <select id="sort" data-sort>
+      <option value="curata">Selezione dell’atelier</option>
+      <option value="prezzo-asc">Prezzo crescente</option>
+      <option value="prezzo-desc">Prezzo decrescente</option>
+      <option value="nome">Nome A–Z</option>
+    </select>
+  </div>
+</div>
+
+<main class="section" style="padding-top:clamp(38px,5vw,62px)">
+  <div class="wrap">
+    <div class="grid-products" data-shop-grid></div>
+  </div>
+</main>
+
+<section class="section section--sand section--tight">
+  <div class="wrap split">
+    <div class="reveal">
+      <p class="eyebrow">Non sai quale scegliere</p>
+      <h2>Ti aiutiamo noi, in due messaggi</h2>
+      <hr class="rule">
+      <p class="lede">Raccontaci per chi è, in che stanza andrà e che profumi ama: ti proponiamo due o tre pezzi e ti diciamo onestamente quale regge meglio l’uso quotidiano.</p>
+      <p style="margin-top:30px"><a class="btn btn--ghost" href="contatti.html">Chiedi un consiglio</a></p>
+    </div>
+    <div class="split__media reveal delay-1">
+      <img src="assets/img/atelier.svg" alt="Vasi e candele allineati sugli scaffali dell’atelier">
+    </div>
+  </div>
+</section>
+
+<script src="assets/js/products.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

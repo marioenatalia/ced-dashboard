@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1250" width="1000" height="1250" preserveAspectRatio="xMidYMid slice" role="img">
+  <defs>
+    <linearGradient id="bg23" x1="0" y1="0" x2=".25" y2="1">
+      <stop offset="0%" stop-color="#1A1310"/><stop offset="100%" stop-color="#33241B"/>
+    </linearGradient>
+    <radialGradient id="glow23" cx="50%" cy="46%" r="46%">
+      <stop offset="0%" stop-color="#F2B764" stop-opacity=".9"/>
+      <stop offset="45%" stop-color="#F2B764" stop-opacity=".26"/>
+      <stop offset="100%" stop-color="#F2B764" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim23" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#000" stop-opacity=".35"/>
+      <stop offset="30%" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset="70%" stop-color="#fff" stop-opacity=".04"/>
+      <stop offset="100%" stop-color="#000" stop-opacity=".38"/>
+    </linearGradient>
+    <radialGradient id="fl23" cx="50%" cy="70%" r="60%">
+      <stop offset="0%" stop-color="#FFF7E2"/><stop offset="45%" stop-color="#FFD98A"/>
+      <stop offset="100%" stop-color="#E9A94B" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vig23" cx="50%" cy="50%" r="72%">
+      <stop offset="55%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000" stop-opacity=".5"/>
+    </radialGradient>
+    <filter id="soft23" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="grain23"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="3" seed="23"/><feColorMatrix type="saturate" values="0"/></filter>
+  </defs>
+  <rect width="1000" height="1250" fill="url(#bg23)"/>
+  <rect width="1000" height="1250" fill="url(#glow23)"/>
+  <ellipse cx="500" cy="950" rx="260" ry="32" fill="#0B0806" opacity=".45" filter="url(#soft23)"/>
+  <rect x="0" y="948" width="1000" height="302" fill="#0F0A07" opacity=".5"/>
+  <rect x="350" y="600" width="300" height="354" rx="10" fill="#EBDAC2"/>
+  <line x1="393" y1="612" x2="393" y2="944" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
+  <line x1="436" y1="612" x2="436" y2="944" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
+  <line x1="479" y1="612" x2="479" y2="944" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
+  <line x1="521" y1="612" x2="521" y2="944" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
+  <line x1="564" y1="612" x2="564" y2="944" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
+  <line x1="607" y1="612" x2="607" y2="944" stroke="#fff" stroke-opacity=".10" stroke-width="6"/>
+  <rect x="350" y="600" width="300" height="354" rx="10" fill="url(#rim23)"/>
+  <ellipse cx="500" cy="600" rx="150" ry="36" fill="#EBDAC2"/>
+  <ellipse cx="500" cy="600" rx="150" ry="36" fill="#fff" opacity=".14"/>
+  <path d="M 500 598 q 4 -7 0 -15" stroke="#3A2E22" stroke-width="2.8" fill="none" stroke-linecap="round" opacity=".8"/>
+  <ellipse cx="500" cy="539" rx="90" ry="158" fill="url(#fl23)" opacity=".5"/>
+  <path d="M 500 497.0 C 530.0 538.9, 522.5 590.0, 500 590.0 C 477.5 590.0, 470.0 538.9, 500 497.0 Z" fill="#FFE6B4" opacity=".95"/>
+  <path d="M 500 534.2 C 511.4 562.1, 509.0 585.4, 500 585.4 C 491.0 585.4, 488.6 562.1, 500 534.2 Z" fill="#FFFCF2"/>
+  <ellipse cx="500" cy="470" rx="330" ry="300" fill="url(#fl23)" opacity=".28"/>
+  <rect width="1000" height="1250" fill="url(#vig23)"/>
+  <rect width="1000" height="1250" filter="url(#grain23)" opacity=".07" style="mix-blend-mode:overlay"/>
+</svg>

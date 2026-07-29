@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" width="800" height="1000" role="img">
+  <defs>
+    <linearGradient id="bg7" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#F2E9DF"/><stop offset="100%" stop-color="#DDCBB9"/>
+    </linearGradient>
+    <radialGradient id="glow7" cx="50%" cy="42%" r="52%">
+      <stop offset="0%" stop-color="#EFD3A9" stop-opacity=".85"/>
+      <stop offset="60%" stop-color="#EFD3A9" stop-opacity=".18"/>
+      <stop offset="100%" stop-color="#EFD3A9" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wax7" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#000" stop-opacity=".16"/>
+      <stop offset="22%" stop-color="#fff" stop-opacity=".30"/>
+      <stop offset="55%" stop-color="#fff" stop-opacity=".05"/>
+      <stop offset="100%" stop-color="#000" stop-opacity=".20"/>
+    </linearGradient>
+    <radialGradient id="flame7" cx="50%" cy="70%" r="60%">
+      <stop offset="0%" stop-color="#FFF6DA"/><stop offset="45%" stop-color="#FFD98A"/>
+      <stop offset="100%" stop-color="#E9A94B" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft7" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="grain7" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="7"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+  </defs>
+  <rect width="800" height="1000" fill="url(#bg7)"/>
+  <rect width="800" height="1000" fill="url(#glow7)"/>
+  <ellipse cx="400" cy="786" rx="202.5" ry="34" fill="#3A2E24" opacity=".18" filter="url(#soft7)"/>
+  <rect x="175" y="760" width="450" height="34" rx="6" fill="#9E6B45" opacity=".55"/>
+  <rect x="250" y="300" width="300" height="460" rx="14" fill="#D9B08C"/>
+  <line x1="280" y1="316" x2="280" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="310" y1="316" x2="310" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="340" y1="316" x2="340" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="370" y1="316" x2="370" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="400" y1="316" x2="400" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="430" y1="316" x2="430" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="460" y1="316" x2="460" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="490" y1="316" x2="490" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <line x1="520" y1="316" x2="520" y2="746" stroke="#fff" stroke-opacity=".16" stroke-width="7"/>
+  <rect x="250" y="300" width="300" height="460" rx="14" fill="url(#wax7)"/>
+  <ellipse cx="400" cy="300" rx="150" ry="26" fill="#D9B08C"/>
+  <ellipse cx="400" cy="300" rx="150" ry="26" fill="#fff" opacity=".22"/>
+  <ellipse cx="400" cy="304" rx="82" ry="13" fill="#000" opacity=".10"/>
+  <path d="M 400 298 q 4 -7 0 -16" stroke="#4A3B2E" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".75"/>
+  <ellipse cx="400" cy="249" rx="60" ry="107" fill="url(#flame7)" opacity=".55"/>
+  <path d="M 400 216.7 C 423.0 248.8, 417.2 288.0, 400 288.0 C 382.8 288.0, 377.0 248.8, 400 216.7 Z" fill="#FFE0A0" opacity=".95"/>
+  <path d="M 400 243.8 C 409.2 266.6, 406.9 284.4, 400 284.4 C 393.1 284.4, 390.8 266.6, 400 243.8 Z" fill="#FFFBEF" opacity=".9"/>
+  <rect width="800" height="1000" filter="url(#grain7)" opacity=".05" style="mix-blend-mode:multiply"/>
+  <rect x="0" y="0" width="800" height="1000" fill="none"/>
+</svg>
