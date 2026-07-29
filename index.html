@@ -415,6 +415,9 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [cashRows, setCashRows]     = useState([]);           // righe multiple in coda: [{tipo,importo}]
       const [soloRecord, setSoloRecord] = useState(false);        // registra solo a registro, NON tocca il dovuto
       const [cashNota, setCashNota]     = useState("");           // promemoria libero (es. rinnovo CNS, Fatture in Cloud)
+      const [cashSplit, setCashSplit]   = useState(false);        // ripartizione incasso con un collaboratore
+      const [cashSplitNome, setCashSplitNome] = useState("Studio Conti");
+      const [cashSplitQuota, setCashSplitQuota] = useState("");   // quota che trattiene il collaboratore
       const [incPdfCli, setIncPdfCli]   = useState(null);         // nome cliente di cui mostrare i PDF in tab Incassi
       const [editPag, setEditPag]       = useState(null);         // {id,data,importo,fonte,descrizione} pagamento in modifica
       const [foglioCat, setFoglioCat]   = useState("focus");
@@ -1387,6 +1390,22 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         }catch(e){ setIncMsg("Errore sconto: "+e.message); }
       };
 
+      // Ripartizione retroattiva: divide un incasso già registrato con un collaboratore
+      // (es. Studio Conti). La proforma resta invariata; cambia solo la quota "nostra".
+      const applicaRipartizione = async(pag, cli)=>{
+        const tot=Number(pag.importo)||0;
+        const nome=prompt(`Ripartizione di ${fmt(tot)}${cli?` — ${cli.nome}`:""}:\nCollaboratore che trattiene una quota:`, pag.esterno||"Studio Conti");
+        if(nome===null) return;
+        const q=parseFloat((prompt(`Quota di ${nome.trim()||"collaboratore"} su ${fmt(tot)} (la nostra sarà la differenza).\n0 o vuoto = togli la ripartizione:`, pag.quota_esterna||"")||"").replace(",","."));
+        const quota=(q>0&&q<=tot)?Math.round(q*100)/100:0;
+        try{
+          const patch=quota>0?{esterno:(nome.trim()||"collaboratore"),quota_esterna:quota}:{esterno:null,quota_esterna:null};
+          await sbUpdate("pagamenti",`id=eq.${pag.id}`,patch);
+          setFoglio(f=>({...f,pagamenti:f.pagamenti.map(x=>x.id===pag.id?{...x,...patch}:x)}));
+          setIncMsg(quota>0?`✂️ ${fmt(tot)} diviso: ${fmt(tot-quota)} nostro · ${fmt(quota)} a ${patch.esterno}`:"Ripartizione rimossa.");
+        }catch(e){ setIncMsg("Errore ripartizione (serve la colonna 'quota_esterna' nel DB): "+e.message); }
+      };
+
       // ── Modifica / eliminazione pagamenti registrati ──
       const salvaEditPag = async()=>{
         if(!editPag) return;
@@ -1563,9 +1582,11 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const TIPI_CASH={contanti:"Incasso contanti",pos:"Incasso POS",assegno:"Incasso assegno",sconto:"Sconto concesso",altro:"Incasso (altro)"};
       // Registrazione manuale multi-riga: applica in sequenza tutte le righe (es. contanti + sconto)
       // su una copia locale delle proforme aperte. Se soloRecord=true NON tocca le proforme (dovuto invariato).
-      const confermaIncassoMulti = async(rows, cliente, pfChosen, record, data, riduzione, nota)=>{
+      const confermaIncassoMulti = async(rows, cliente, pfChosen, record, data, riduzione, nota, split)=>{
         nota=(nota||"").trim();
         const esiti=[]; const patchLocal=[]; const nuovi=[];
+        // la ripartizione (quota a un collaboratore) si applica alla prima riga di denaro (non sconto)
+        const splitIdx = (split && split.quota>0) ? rows.findIndex(r=>r.tipo!=="sconto") : -1;
         let working = foglio.proforme.filter(p=>p.cliente_id===cliente.id && !p.pagato && Number(p.importo)>0)
           .map(p=>({...p}))
           .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999")));
@@ -1573,8 +1594,9 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         for(let ri=0; ri<rows.length; ri++){
           const row=rows[ri]; const isSconto=row.tipo==="sconto";
           const primo = record ? (pfChosen?.id||null) : (working.find(p=>!p.pagato && Number(p.importo)>0)?.id||null);
-          const pag={cliente_id:cliente.id,proforma_id:primo,data,importo:row.importo,fonte:row.tipo,
-            descrizione:((TIPI_CASH[row.tipo]||"Incasso")+(nota?` — 📝 ${nota}`:"")+(record?" (solo per record)":"")).slice(0,300),
+          const rip = ri===splitIdx ? {esterno:split.esterno, quota_esterna:Math.min(split.quota,row.importo)} : {};
+          const pag={cliente_id:cliente.id,proforma_id:primo,data,importo:row.importo,fonte:row.tipo,...rip,
+            descrizione:((TIPI_CASH[row.tipo]||"Incasso")+(nota?` — 📝 ${nota}`:"")+(rip.quota_esterna?` ✂️ ${fmt(rip.quota_esterna)} a ${split.esterno}`:"")+(record?" (solo per record)":"")).slice(0,300),
             mov_key:`CASH|${cliente.id}|${data}|${row.importo}|${row.tipo}|${Date.now()}|${ri}`};
           const ins=await sbInsert("pagamenti",[pag]); nuovi.push(ins[0]);
           if(record){ esiti.push(`${TIPI_CASH[row.tipo]||"Incasso"} ${fmt(row.importo)} SOLO PER RECORD`); continue; }
@@ -1620,12 +1642,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         const rows=[...cashRows]; if(imp>0) rows.push({tipo:cashTipo,importo:imp});
         if(!rows.length){ setIncMsg("⚠ Nessuna riga: inserisci un importo."); return; }
         const pfChosen = cashPf!=="auto" ? foglio.proforme.find(p=>p.id===cashPf) : null;
+        const sq=parseFloat(String(cashSplitQuota).replace(",","."));
+        const split = (cashSplit && sq>0) ? {esterno:(cashSplitNome.trim()||"collaboratore"), quota:Math.round(sq*100)/100} : null;
         setIncBusy(true);
         try{
-          const esito=await confermaIncassoMulti(rows,cli,pfChosen,soloRecord,cashData||todayStr(),cashMode==="riduzione",cashNota);
+          const esito=await confermaIncassoMulti(rows,cli,pfChosen,soloRecord,cashData||todayStr(),cashMode==="riduzione",cashNota,split);
           const tot=rows.reduce((s,r)=>s+r.importo,0);
-          setIncMsg(`✓ ${cli.nome}: ${fmt(tot)} registrato (${rows.length} rig${rows.length>1?"he":"a"})${esito?` · ${esito}`:" (nessuna proforma aperta abbinata)"}`);
-          setCashImp(""); setCashRows([]); setCashPf("auto"); setSoloRecord(false); setCashNota("");
+          setIncMsg(`✓ ${cli.nome}: ${fmt(tot)} registrato (${rows.length} rig${rows.length>1?"he":"a"})${split?` · ✂️ ${fmt(split.quota)} a ${split.esterno}`:""}${esito?` · ${esito}`:" (nessuna proforma aperta abbinata)"}`);
+          setCashImp(""); setCashRows([]); setCashPf("auto"); setSoloRecord(false); setCashNota(""); setCashSplit(false); setCashSplitQuota("");
         }catch(e){ setIncMsg("Errore: "+e.message); }
         setIncBusy(false);
       };
@@ -2585,6 +2609,19 @@ In italiano, con numeri ed euro.`,
                         <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>+ riga corrente {parseFloat(cashImp)>0?fmt(parseFloat(cashImp)):"(vuota)"} — totale {fmt(cashRows.reduce((s,r)=>s+r.importo,0)+(parseFloat(cashImp)>0?parseFloat(cashImp):0))}</span>
                       </div>
                     )}
+                    {cashCliObj && !soloRecord && (
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:8}}>
+                        <label style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:600,color:cashSplit?C.purple:"var(--color-text-secondary)",cursor:"pointer",padding:"5px 8px",borderRadius:7,border:`1px solid ${cashSplit?C.purple:"var(--color-border-tertiary)"}`,background:cashSplit?C.purpleL:"transparent"}}>
+                          <input type="checkbox" checked={cashSplit} onChange={e=>setCashSplit(e.target.checked)} style={{margin:0}}/>
+                          ✂️ Dividi con collaboratore
+                        </label>
+                        {cashSplit && (()=>{ const tot=cashRows.reduce((s,r)=>s+r.importo,0)+(parseFloat(cashImp)>0?parseFloat(cashImp):0); const sq=parseFloat(String(cashSplitQuota).replace(",","."))||0; const nostra=Math.round((tot-Math.min(sq,tot))*100)/100; return (<>
+                          <input value={cashSplitNome} onChange={e=>setCashSplitNome(e.target.value)} placeholder="Collaboratore" title="Chi trattiene una quota (es. Studio Conti)" style={{width:140,padding:"6px 9px",borderRadius:7,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}/>
+                          <input type="number" value={cashSplitQuota} onChange={e=>setCashSplitQuota(e.target.value)} placeholder="Quota loro €" style={{width:100,padding:"6px 9px",borderRadius:7,border:`1px solid ${C.purple}55`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11}}/>
+                          {sq>0 && <span style={{fontSize:11,fontWeight:600,color:C.purple}}>→ {fmt(nostra)} nostro · {fmt(Math.min(sq,tot))} a {cashSplitNome.trim()||"collaboratore"}</span>}
+                        </>);})()}
+                      </div>
+                    )}
                     {cashCliObj && (
                       <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:8}}>
                         <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>Applica a:</span>
@@ -2663,7 +2700,7 @@ In italiano, con numeri ed euro.`,
                 <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                     <p style={{margin:0,fontSize:13,fontWeight:600}}>Registro incassi ({foglio.pagamenti.length})</p>
-                    <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.filter(p=>p.fonte!=="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0))}{(()=>{const sc=foglio.pagamenti.filter(p=>p.fonte==="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0); return sc>0?<span style={{color:S.warnD,fontWeight:500}}> · sconti {fmt(sc)}</span>:null;})()}</span>
+                    <span style={{fontSize:12,fontWeight:600,color:S.good}}>{fmt(foglio.pagamenti.filter(p=>p.fonte!=="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0))}{(()=>{const sc=foglio.pagamenti.filter(p=>p.fonte==="sconto").reduce((s,p)=>s+(Number(p.importo)||0),0); const gir=foglio.pagamenti.reduce((s,p)=>s+(Number(p.quota_esterna)||0),0); return <>{sc>0?<span style={{color:S.warnD,fontWeight:500}}> · sconti {fmt(sc)}</span>:null}{gir>0?<span style={{color:C.purple,fontWeight:500}}> · ✂️ girato {fmt(gir)}</span>:null}</>;})()}</span>
                   </div>
                   {(()=>{
                     const FONTI={estratto:["🏦","BONIFICI"],contanti:["💶","CONTANTI"],pos:["💳","POS"],assegno:["🧾","ASSEGNI"],sconto:["🏷️","SCONTI"],altro:["•","ALTRO"]};
@@ -2683,9 +2720,13 @@ In italiano, con numeri ed euro.`,
                       <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}>
                         <i className={`ti ${({contanti:"ti-coin",pos:"ti-credit-card",assegno:"ti-file-text",estratto:"ti-building-bank",sconto:"ti-discount"})[p.fonte]||"ti-cash"}`} style={{fontSize:13,color:S.good}} title={p.fonte}/>
                         <span style={{flex:1,fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c?.nome||"—"} <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>· {p.fonte} · {p.data?fmtD(p.data):"—"}</span>{(p.descrizione||"").includes("📝")&&<span style={{fontSize:10,color:S.warnD,fontStyle:"italic"}} title={p.descrizione}> · {p.descrizione.slice(p.descrizione.indexOf("📝"),p.descrizione.indexOf("📝")+60)}</span>}{(p.descrizione||"").includes("solo per record")&&<span style={{fontSize:9,padding:"0 5px",borderRadius:5,background:S.warnD+"18",color:S.warnD,fontWeight:600,marginLeft:4}}>RECORD</span>}</span>
-                        <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
+                        <div style={{textAlign:"right"}}>
+                          <b style={{fontSize:12,color:S.good}}>{fmt(p.importo)}</b>
+                          {Number(p.quota_esterna)>0 && <div style={{fontSize:9,color:C.purple,fontWeight:600,lineHeight:1.1}}>✂️ {fmt(Number(p.importo)-Number(p.quota_esterna))} nostro · {fmt(p.quota_esterna)} {p.esterno||"collab."}</div>}
+                        </div>
                         {c && <button onClick={()=>openClientPdfs(c.nome)} title="Proforme PDF del cliente" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:6,padding:"2px 7px",color:C.purple,cursor:"pointer",fontSize:12}}>📄</button>}
                         {p.fonte!=="sconto" && <button onClick={()=>applicaScontoRapido(p,c)} title="Aggiungi uno sconto (anche parziale) collegato a questo pagamento: riduce o salda la proforma e aggiorna il dovuto del cliente" style={{background:S.warnD+"14",border:`1px solid ${S.warnD}44`,borderRadius:6,padding:"2px 7px",color:S.warnD,cursor:"pointer",fontSize:12}}>🏷️</button>}
+                        {p.fonte!=="sconto" && <button onClick={()=>applicaRipartizione(p,c)} title="Dividi questo incasso con un collaboratore (es. Studio Conti): registra quanto è nostro e quanto girato" style={{background:C.purpleL,border:`1px solid ${C.purple}44`,borderRadius:6,padding:"2px 7px",color:C.purple,cursor:"pointer",fontSize:12}}>✂️</button>}
                         <button onClick={()=>setEditPag(inEdit?null:{id:p.id,data:p.data||"",importo:p.importo,fonte:p.fonte,descrizione:p.descrizione||""})} title="Modifica pagamento" style={{background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,padding:"2px 7px",color:S.slateD,cursor:"pointer",fontSize:12}}>✏️</button>
                         <button onClick={()=>eliminaPag(p)} title="Elimina pagamento" style={{background:C.redL,border:`1px solid ${C.red}33`,borderRadius:6,padding:"2px 7px",color:C.red,cursor:"pointer",fontSize:12}}>🗑</button>
                       </div>
@@ -2716,7 +2757,7 @@ In italiano, con numeri ed euro.`,
                 const fk=f=>FONTI[f]?f:"altro";
                 const MESI_IT=["","Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
                 const byM={};
-                (foglio.pagamenti||[]).forEach(p=>{ const m=(p.data||"").slice(0,7)||"—"; byM[m]=byM[m]||{n:0}; const f=fk(p.fonte); byM[m][f]=(byM[m][f]||0)+(Number(p.importo)||0); byM[m].n++; });
+                (foglio.pagamenti||[]).forEach(p=>{ const m=(p.data||"").slice(0,7)||"—"; byM[m]=byM[m]||{n:0,gir:0}; const f=fk(p.fonte); byM[m][f]=(byM[m][f]||0)+(Number(p.importo)||0); byM[m].gir+=(Number(p.quota_esterna)||0); byM[m].n++; });
                 const mesi=Object.keys(byM).sort().reverse();
                 return (
                 <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginTop:12}}>
@@ -2729,7 +2770,8 @@ In italiano, con numeri ed euro.`,
                       {Object.keys(FONTI).filter(f=>d[f]).map(f=>(
                         <span key={f} style={{fontSize:11,padding:"3px 9px",borderRadius:14,background:f==="sconto"?S.warnD+"14":"var(--color-background-secondary)",color:f==="sconto"?S.warnD:"var(--color-text-primary)",fontWeight:600}}>{FONTI[f][0]} {FONTI[f][1]} {fmt(d[f])}</span>
                       ))}
-                      <span style={{marginLeft:"auto",fontSize:12,fontWeight:700,color:S.good}}>{fmt(tot)}</span>
+                      {d.gir>0 && <span style={{fontSize:11,padding:"3px 9px",borderRadius:14,background:C.purpleL,color:C.purple,fontWeight:600}}>✂️ girato {fmt(d.gir)}</span>}
+                      <span style={{marginLeft:"auto",fontSize:12,fontWeight:700,color:S.good}}>{fmt(tot)}{d.gir>0?<span style={{fontSize:10,fontWeight:500,color:C.purple}}> · netto {fmt(tot-d.gir)}</span>:null}</span>
                     </div>
                     );
                   })}
