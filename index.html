@@ -96,12 +96,11 @@
           <p style="margin:0">Monitor Pagamenti</p>
         </div>
       </div>
-      <label>Utente</label>
-      <input type="text" id="login-user" placeholder="mario@focusdata" autocomplete="username"/>
-      <label>Password</label>
-      <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password"/>
-      <button id="login-btn" onclick="doLogin()">Accedi</button>
-      <div id="login-error">❌ Credenziali non valide</div>
+      <p id="login-msg" style="margin:16px 0 18px;font-size:13px;line-height:1.5;opacity:.75">
+        Si entra dal portale operativo, dove hai già fatto l'accesso.
+      </p>
+      <button id="login-btn" onclick="location.href='https://home.focusdataconsulting.com/vai/ced'">Vai al portale</button>
+      <div id="login-error">Il collegamento dal portale non è valido o è scaduto: torna al portale e riclicca la tessera CED.</div>
     </div>
   </div>
 
@@ -110,29 +109,48 @@
   <script>
     // Tema: default CHIARO. Applicato subito per evitare flash.
     (function(){ try { document.documentElement.setAttribute("data-theme", localStorage.getItem("ced_theme")||"light"); } catch(e){ document.documentElement.setAttribute("data-theme","light"); } })();
-    const USERS = { "mario@focusdata": "mario-2026" };
+    // ── Accesso: si entra dal portale operativo ──────────────────────────
+    // Prima qui c'era un elenco utente/password scritto in chiaro, leggibile da
+    // chiunque aprisse il sorgente della pagina. Ora la pagina non conosce
+    // nessuna password: accetta il lasciapassare firmato dal portale e ne
+    // verifica la firma con la chiave PUBBLICA del portale.
+    const PORTALE = "https://home.focusdataconsulting.com";
 
-    function doLogin() {
-      const u = document.getElementById("login-user").value.trim().toLowerCase();
-      const p = document.getElementById("login-pass").value;
-      if (USERS[u] && USERS[u] === p) {
-        sessionStorage.setItem("ced_auth", "1");
-        document.getElementById("login-screen").style.display = "none";
-        document.getElementById("root").style.display = "block";
-      } else {
-        document.getElementById("login-error").style.display = "block";
-        document.getElementById("login-pass").value = "";
-      }
-    }
-
-    // Invio con Enter
-    document.addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
-
-    // Controlla se già autenticato
-    if (sessionStorage.getItem("ced_auth") === "1") {
+    function _apri() {
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("root").style.display = "block";
     }
+    function _b64u(s) {
+      return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+    }
+
+    async function _entraDalPortale() {
+      const t = new URLSearchParams(location.search).get("t");
+      if (!t) return false;
+      try {
+        const [corpo, firma] = t.split(".");
+        const pem = await (await fetch(PORTALE + "/sso/chiave-pubblica")).text();
+        const der = Uint8Array.from(atob(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")), c => c.charCodeAt(0));
+        const chiave = await crypto.subtle.importKey("spki", der, { name: "Ed25519" }, false, ["verify"]);
+        const ok = await crypto.subtle.verify({ name: "Ed25519" }, chiave, _b64u(firma), new TextEncoder().encode(corpo));
+        if (!ok) return false;
+        const dati = JSON.parse(new TextDecoder().decode(_b64u(corpo)));
+        if (dati.dash !== "ced" || !dati.scade || dati.scade < Date.now()) return false;
+        sessionStorage.setItem("ced_auth", "1");
+        history.replaceState(null, "", location.pathname);   // via il lasciapassare dalla barra
+        return true;
+      } catch (e) {
+        console.warn("ingresso dal portale non riuscito:", e.message);
+        return false;
+      }
+    }
+
+    (async () => {
+      if (sessionStorage.getItem("ced_auth") === "1") { _apri(); return; }
+      if (await _entraDalPortale()) { _apri(); return; }
+      if (new URLSearchParams(location.search).get("t"))
+        document.getElementById("login-error").style.display = "block";
+    })();
   </script>
 
   <script type="text/plain" id="app-code">
