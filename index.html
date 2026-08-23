@@ -915,6 +915,12 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       // ── IMPORT EXCEL (fotografia da incassare) ──
       const normName = s => (s||"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\b(SRL|SRLS|SNC|SAS|SPA|DI|E|C|ASSOC|ASSOCIAZIONE|CULTURALE)\b/g," ").replace(/\s+/g," ").trim();
+      // Partita IVA ridotta alle sole 11 cifre (via "IT", punti, spazi). Stringa vuota se non è una P.IVA:
+      // meglio nessun identificatore che uno sbagliato, perché su questo si abbina il cliente.
+      const normPiva = v => { const s=String(v||"").replace(/[^0-9]/g,""); return s.length===11 ? s : ""; };
+      // La colonna partita_iva sul Foglio potrebbe non esistere ancora (SQL non eseguita): loadFoglio
+      // fa select=*, quindi la presenza della proprietà sui clienti caricati dice se c'è.
+      const hasPivaCol = () => (foglio.clienti||[]).some(c=>Object.prototype.hasOwnProperty.call(c,"partita_iva"));
       // Discriminante Excel: una cartella cliente è ammessa se in whitelist (Excel) o NUOVA (non esisteva all'allineamento). Esclusa se nota ma fuori Excel.
       const folderAllowed = name => {
         const wl = LS.get("ced_whitelist", null);
@@ -1050,16 +1056,29 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       // Inserisce/aggiorna una proforma nel Foglio usando una cache clienti locale (evita duplicati nei loop)
       const _pushRecoRow = async(row, clientiCache, proformeCache)=>{
         const [per,catSug]=recoPeriodMap(row);
+        // 0) partita IVA letta dal documento: identificatore esatto, batte qualsiasi confronto sui nomi
         // 1) alias banca (collegamenti espliciti 🔗) → 2) match esatto su nome AI o cartella → 3) prefisso
+        const pv=normPiva(row.piva);
         const nb=normName(row.cliente), nf=normName(row.folder);
         let cli=null;
-        const al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca); if(!t) return false;
-          return t===nb||t===nf||(t.length>6&&(nb.includes(t)||nf.includes(t)))||(nb.length>6&&t.includes(nb))||(nf.length>6&&t.includes(nf)); });
-        if(al) cli=clientiCache.find(c=>c.id===al.cliente_id)||null;
+        if(pv) cli=clientiCache.find(c=>normPiva(c.partita_iva)===pv)||null;
+        if(!cli){
+          const al=(foglio.alias||[]).find(a=>{ const t=normName(a.testo_banca); if(!t) return false;
+            return t===nb||t===nf||(t.length>6&&(nb.includes(t)||nf.includes(t)))||(nb.length>6&&t.includes(nb))||(nf.length>6&&t.includes(nf)); });
+          if(al) cli=clientiCache.find(c=>c.id===al.cliente_id)||null;
+        }
         if(!cli) cli=clientiCache.find(c=>{ const a=normName(c.nome); return a&&(a===nb||a===nf); });
         if(!cli) cli=clientiCache.find(c=>{ const a=normName(c.nome); return a&&nb&&(a.startsWith(nb.slice(0,6))||nb.startsWith(a.slice(0,6))); });
         if(!cli) cli=clientiCache.find(c=>{ const a=normName(c.nome); return a&&nf&&(a.startsWith(nf.slice(0,6))||nf.startsWith(a.slice(0,6))); });
-        if(!cli){ const ins=await sbInsert("clienti",[{nome:row.cliente||row.folder,categoria:catSug}]); cli=ins[0]; clientiCache.push(cli); }
+        if(!cli){
+          const nuovo={nome:row.cliente||row.folder,categoria:catSug};
+          if(pv&&hasPivaCol()) nuovo.partita_iva=pv;
+          const ins=await sbInsert("clienti",[nuovo]); cli=ins[0]; clientiCache.push(cli);
+        } else if(pv&&hasPivaCol()&&!normPiva(cli.partita_iva)){
+          // riconosciuto dal nome ma senza partita IVA: la impara dal documento.
+          // Non sovrascrive mai una P.IVA già presente: una lettura sbagliata non deve rovinare un dato buono.
+          try{ await sbUpdate("clienti",`id=eq.${cli.id}`,{partita_iva:pv}); cli.partita_iva=pv; }catch(e){}
+        }
         const patch={importo:row.totale||0,pagato:!!row.paid,pdf_path:row.file||null,data_emissione:row.data||null};
         const ex=proformeCache.find(p=>p.cliente_id===cli.id && p.periodo===per && p.anno===2026);
         if(ex){ await sbUpdate("proforme",`id=eq.${ex.id}`,patch); Object.assign(ex,patch); }
@@ -1159,12 +1178,12 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
             const b64=bufToB64(buf);
             const d=await callAIWithKey([{role:"user",content:[
               {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
-              {type:"text",text:`Parcella/proforma italiana studio CED. Dalla CAUSALE ricava il periodo di competenza. Rispondi SOLO JSON: {"cliente":"...","data_emissione":"YYYY-MM-DD","periodo":"I trimestre|II trimestre|III trimestre|IV trimestre|annuale|mensile|bilancio|altro","competenza":"causale","importo_imponibile":0.00,"importo_totale":0.00}`}
+              {type:"text",text:`Parcella/proforma italiana studio CED. Dalla CAUSALE ricava il periodo di competenza. La partita IVA da riportare è quella del CLIENTE destinatario del documento, MAI quella dello studio che lo emette (l'emittente è l'intestazione in alto, il cliente è il destinatario): 11 cifre, senza "IT" né punti. Se non è leggibile con certezza lascia stringa vuota. Rispondi SOLO JSON: {"cliente":"...","partita_iva":"","data_emissione":"YYYY-MM-DD","periodo":"I trimestre|II trimestre|III trimestre|IV trimestre|annuale|mensile|bilancio|altro","competenza":"causale","importo_imponibile":0.00,"importo_totale":0.00}`}
             ]}], null, MODEL_EXTRACT).then(raw=>{ try{return JSON.parse(raw.replace(/\`\`\`json|\`\`\`/g,"").trim());}catch{return null;} });
             const wl=inWhitelist(it.folder);
             const savedStates=LS.get("ced_reco_states",{});
             const row={ file:it.name, folder:it.folder, path:it.path, paid:it.paid,
-              cliente:d?.cliente||it.folder, data:d?.data_emissione||"", periodo:d?.periodo||"?",
+              cliente:d?.cliente||it.folder, piva:normPiva(d?.partita_iva), data:d?.data_emissione||"", periodo:d?.periodo||"?",
               competenza:d?.competenza||"", imponibile:d?.importo_imponibile||0, totale:d?.importo_totale||0,
               inExcel: wl===true, parseFail:!d, state: savedStates[it.path] };
             rows.push(row); done++;
@@ -2858,10 +2877,12 @@ In italiano, con numeri ed euro.`,
                 const miss=fuori.filter(r=>!r.state);
                 const missTot=miss.reduce((s,r)=>s+(r.totale||0),0);
                 const nPagate=recoRows.filter(r=>r.state==="paid").length;
+                const nPiva=recoRows.filter(r=>r.piva).length;
                 const view = recoFilter==="mancanti" ? fuori : recoRows;
                 return (<>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
                     <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>PROFORMA LETTE</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{recoRows.length}</p></div>
+                    <div style={{background:"var(--color-surface)",border:`1px solid ${nPiva===recoRows.length?S.good+"55":"var(--color-border-tertiary)"}`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}} title="Proforma da cui l'AI ha letto la partita IVA del cliente: è la chiave con cui la riga viene abbinata al cliente giusto"><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>CON PARTITA IVA</p><p style={{margin:0,fontSize:19,fontWeight:700,color:nPiva===recoRows.length?S.good:"var(--color-text-primary)"}}>{nPiva}<span style={{fontSize:12,fontWeight:500,color:"var(--color-text-secondary)"}}> / {recoRows.length}</span></p></div>
                     <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>FUORI EXCEL</p><p style={{margin:0,fontSize:19,fontWeight:700,color:S.warn}}>{miss.length}</p></div>
                     <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>IMPORTO FUORI EXCEL</p><p style={{margin:0,fontSize:17,fontWeight:700,color:S.warn}}>{fmt(missTot)}</p></div>
                   </div>
@@ -2882,7 +2903,7 @@ In italiano, con numeri ed euro.`,
                         <div style={{width:8,height:8,borderRadius:"50%",background:dot,flexShrink:0}}/>
                         <div style={{flex:1,minWidth:0}}>
                           <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:dimmed?"line-through":"none"}}>{r.cliente}</p>
-                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}{r.state==="paid"?" · ✓ segnata pagata":r.state==="excluded"?" · esclusa":r.state==="added"?" · ✓ aggiunta al Foglio":""}</p>
+                          <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{r.periodo} · {r.data||"—"} · {r.piva?`P.IVA ${r.piva}`:"P.IVA non letta"} {r.paid?"· (in PAGATO)":""} {r.parseFail?"· ⚠ lettura incerta":""}{r.state==="paid"?" · ✓ segnata pagata":r.state==="excluded"?" · esclusa":r.state==="added"?" · ✓ aggiunta al Foglio":""}</p>
                         </div>
                         <span style={{fontSize:13,fontWeight:600,color:r.inExcel?"var(--color-text-primary)":S.warn,marginRight:4}}>{fmt(r.totale)}</span>
                         {r.state ? (
