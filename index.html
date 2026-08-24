@@ -1108,6 +1108,36 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         await loadFoglio();
         setRecoAddMsg(`✓ Aggiunte ${added} proforma al Foglio${err?` · ${err} errori`:""}. Controlla Dashboard/Clienti.`);
       };
+      // Scrive nel Foglio SOLO le partite IVA lette dalle proforma: non tocca importi, stato
+      // pagato, date o note, e non crea clienti nuovi. Serve a dare al Foglio la chiave di
+      // abbinamento senza passare da una sincronizzazione completa.
+      // Abbina SOLO su nome normalizzato IDENTICO: niente prefisso a 6 caratteri, perché è
+      // proprio lì che nascono gli scambi di cliente (7 clienti iniziano per "PIZZA").
+      // Meglio lasciare un cliente senza partita IVA che dargliene una di un altro.
+      const salvaPiveNelFoglio = async()=>{
+        if(!sbReady()){ setRecoAddMsg("⚠ Connetti prima Supabase (tab Foglio)"); return; }
+        if(!hasPivaCol()){ setRecoAddMsg("⚠ Manca la colonna partita_iva sulla tabella clienti."); return; }
+        const perPiva=new Map();
+        recoRows.forEach(r=>{ const p=normPiva(r.piva); if(p&&!perPiva.has(p)) perPiva.set(p,r); });
+        if(!perPiva.size){ setRecoAddMsg("Nessuna partita IVA letta dalle proforma."); return; }
+        if(!confirm(`Scrivere ${perPiva.size} partite IVA nel Foglio?\n\n• solo sui clienti che non ne hanno già una\n• NON tocca importi, stato pagato o date\n• NON crea clienti nuovi\n• abbina solo a nome identico: gli incerti restano da collegare a mano`)) return;
+        setRecoAddMsg(`Scrittura di ${perPiva.size} partite IVA in corso...`);
+        const cc=[...foglio.clienti];
+        let scritte=0, gia=0, nonTrovati=0, err=0;
+        for(const [pv,r] of perPiva){
+          try{
+            if(cc.find(c=>normPiva(c.partita_iva)===pv)){ gia++; continue; }
+            const nb=normName(r.cliente), nf=normName(r.folder);
+            const cli=cc.find(c=>{ const a=normName(c.nome); return a&&(a===nb||a===nf); });
+            if(!cli){ nonTrovati++; continue; }
+            if(normPiva(cli.partita_iva)){ gia++; continue; }
+            await sbUpdate("clienti",`id=eq.${cli.id}`,{partita_iva:pv});
+            cli.partita_iva=pv; scritte++;
+          }catch(e){ err++; }
+        }
+        await loadFoglio();
+        setRecoAddMsg(`✓ ${scritte} partite IVA scritte nel Foglio · ${gia} già presenti · ${nonTrovati} senza cliente dal nome identico (da collegare a mano)${err?` · ${err} errori`:""}`);
+      };
       // Sincronizza TUTTE le righe lette nel Foglio: crea le proforma mancanti (es. III trim)
       // e aggiorna importo/stato pagato dalle notule. Idempotente: aggiorna se esiste, crea se manca.
       const syncAllRecoToFoglio = async()=>{
@@ -2890,8 +2920,9 @@ In italiano, con numeri ed euro.`,
                     {[["mancanti",`Solo fuori Excel (${miss.length})`],["tutti",`Tutte (${recoRows.length})`]].map(([k,l])=>(
                       <button key={k} onClick={()=>setRecoFilter(k)} style={{padding:"5px 12px",borderRadius:20,border:recoFilter===k?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:recoFilter===k?S.slateD+"15":"transparent",color:recoFilter===k?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:recoFilter===k?600:400}}>{l}</button>
                     ))}
-                    {miss.length>0 && <button onClick={addAllRecoToFoglio} title="Aggiungi tutte le nuove al Foglio" style={{marginLeft:"auto",padding:"5px 12px",borderRadius:8,border:"none",background:S.slateD,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-database-plus"/>Aggiungi tutte al Foglio</button>}
-                    {recoRows.length>0 && <button onClick={syncAllRecoToFoglio} title="Crea le proforma mancanti (es. III trimestre) e aggiorna importi/stato pagato dalle notule, per TUTTE le righe lette (anche quelle già in Excel)" style={{marginLeft:miss.length>0?0:"auto",padding:"5px 12px",borderRadius:8,border:`1px solid ${S.slateD}`,background:"transparent",color:S.slateD,fontSize:12,fontWeight:600,cursor:"pointer"}}>⟳ Sincronizza Foglio ({recoRows.filter(r=>(r.totale||0)>0&&r.state!=="excluded"&&!r.parseFail).length})</button>}
+                    {nPiva>0 && <button onClick={salvaPiveNelFoglio} title="Scrive nel Foglio solo le partite IVA lette dalle proforma: non tocca importi, stato pagato o date, e non crea clienti nuovi" style={{marginLeft:"auto",padding:"5px 12px",borderRadius:8,border:`1px solid ${S.good}`,background:S.good+"15",color:S.good,fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-key"/>Salva {nPiva} partite IVA</button>}
+                    {miss.length>0 && <button onClick={addAllRecoToFoglio} title="Aggiungi tutte le nuove al Foglio" style={{marginLeft:nPiva>0?0:"auto",padding:"5px 12px",borderRadius:8,border:"none",background:S.slateD,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-database-plus"/>Aggiungi tutte al Foglio</button>}
+                    {recoRows.length>0 && <button onClick={syncAllRecoToFoglio} title="Crea le proforma mancanti (es. III trimestre) e aggiorna importi/stato pagato dalle notule, per TUTTE le righe lette (anche quelle già in Excel)" style={{marginLeft:(nPiva>0||miss.length>0)?0:"auto",padding:"5px 12px",borderRadius:8,border:`1px solid ${S.slateD}`,background:"transparent",color:S.slateD,fontSize:12,fontWeight:600,cursor:"pointer"}}>⟳ Sincronizza Foglio ({recoRows.filter(r=>(r.totale||0)>0&&r.state!=="excluded"&&!r.parseFail).length})</button>}
                   </div>
                   {recoAddMsg && <p style={{margin:"0 0 10px",fontSize:12,fontWeight:500,color:recoAddMsg.startsWith("Errore")||recoAddMsg.startsWith("⚠")?C.red:recoAddMsg.startsWith("✓")?S.good:S.slateD,background:"var(--color-background-secondary)",padding:"8px 12px",borderRadius:8}}>{recoAddMsg}</p>}
                   <div style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",boxShadow:"var(--shadow-card)"}}>
