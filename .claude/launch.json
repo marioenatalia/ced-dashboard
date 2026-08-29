@@ -4,8 +4,9 @@
     {
       "name": "ced-dashboard",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "serve", "-l", "3010", "."],
-      "port": 3010
+      "runtimeArgs": ["--yes", "serve", "-l", "3041", "."],
+      "port": 3041,
+      "autoPort": false
     }
   ]
 }

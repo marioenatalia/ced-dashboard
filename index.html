@@ -410,6 +410,9 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [recoSolo, setRecoSolo]     = useState("");   // riconciliazione limitata a un solo cliente/cartella
       const [recoProg, setRecoProg]     = useState({done:0,total:0});
       const [recoRows, setRecoRows]     = useState(()=>LS.get("ced_reco_rows",[]));
+      // Scheda Solleciti
+      const [solFilter, setSolFilter]   = useState("");
+      const [solSoloScad, setSolSoloScad] = useState(true);
       const [recoFilter, setRecoFilter] = useState("mancanti"); // mancanti|tutti
       const [recoAddMsg, setRecoAddMsg] = useState("");
       // Foglio Pagamenti (Supabase)
@@ -921,6 +924,8 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       // La colonna partita_iva sul Foglio potrebbe non esistere ancora (SQL non eseguita): loadFoglio
       // fa select=*, quindi la presenza della proprietà sui clienti caricati dice se c'è.
       const hasPivaCol = () => (foglio.clienti||[]).some(c=>Object.prototype.hasOwnProperty.call(c,"partita_iva"));
+      // Colonna clienti.canale_sollecito (scheda Solleciti): come sopra, la pagina funziona anche senza.
+      const hasCanaleCol = () => (foglio.clienti||[]).some(c=>Object.prototype.hasOwnProperty.call(c,"canale_sollecito"));
       // Discriminante Excel: una cartella cliente è ammessa se in whitelist (Excel) o NUOVA (non esisteva all'allineamento). Esclusa se nota ma fuori Excel.
       const folderAllowed = name => {
         const wl = LS.get("ced_whitelist", null);
@@ -1253,7 +1258,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
 
       // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
       useEffect(()=>{
-        if((tab==="dashboard"||tab==="fatture"||tab==="foglio"||tab==="clienti"||tab==="riconcilia"||tab==="incassi") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
+        if((tab==="dashboard"||tab==="fatture"||tab==="foglio"||tab==="clienti"||tab==="riconcilia"||tab==="incassi"||tab==="solleciti") && sbReady() && foglio.clienti.length===0 && !foglioLoad) loadFoglio();
       }, [tab]);
 
       const saveCell = async(cliente, periodo, patch)=>{
@@ -1942,6 +1947,7 @@ In italiano, con numeri ed euro.`,
         {id:"incassi",  label:"Incassi",   icon:"ti-cash"},
         {id:"riconcilia",label:"Riconcilia",icon:"ti-arrows-diff"},
         {id:"pagamenti",label:"Pagamenti", icon:"ti-credit-card"},
+        {id:"solleciti",label:"Solleciti", icon:"ti-bell"},
         {id:"yandex",   label:"Archivio",  icon:"ti-cloud"},
         {id:"sync",     label:"Sync Auto", icon:"ti-refresh"},
         {id:"ai",       label:"AI Report", icon:"ti-sparkles"},
@@ -2953,6 +2959,91 @@ In italiano, con numeri ed euro.`,
               })()}
             </div>
           )}
+
+          {/* ══ SOLLECITI: proforme impagate per cliente, scadenze e canale di comunicazione ══ */}
+          {tab==="solleciti" && (()=>{
+            if(!sbReady()) return <p style={{fontSize:13,color:"var(--color-text-secondary)"}}>Connetti prima Supabase (tab Foglio) per vedere le proforme.</p>;
+            const oggi=todayStr();
+            const scadEff = p => p.scadenza || PERIOD_DEADLINE[p.periodo] || "";
+            const CANALI=[["whatsapp","💬 WhatsApp"],["email","📧 Email"],["pec","📨 PEC"],["telefono","📞 Telefonata"],["lettera","✉️ Lettera"],["nessuno","🚫 Nessuna"]];
+            const TRATT=[["normale","⚖️ normale"],["cortese","🕊️ cortese"],["monitorato","👁️ monitorato"]];
+            // livello di sollecito che scatterebbe oggi (stesse soglie della scheda cliente / WhatsApp Studio)
+            const livOggi=(gg,tr)=>{ const SOG=tr==="cortese"?[15,45]:tr==="monitorato"?[5,10,20,30]:[7,15,30,45]; const maxL=tr==="cortese"?2:4; let liv=0; SOG.forEach((s,i)=>{ if(gg>=s && i+1<=maxL) liv=i+1; }); return liv; };
+            const q=solFilter.trim().toLowerCase();
+            const righe=foglio.clienti.map(c=>{
+              const open=foglio.proforme.filter(p=>p.cliente_id===c.id && !p.pagato && Number(p.importo)>0)
+                .sort((a,b)=>String(scadEff(a)||"9999").localeCompare(String(scadEff(b)||"9999")));
+              if(!open.length) return null;
+              const dovuto=open.reduce((s,p)=>s+(Number(p.importo)||0),0);
+              const scad=open.filter(p=>{ const sc=scadEff(p); return sc && sc<oggi; });
+              const scaduto=scad.reduce((s,p)=>s+(Number(p.importo)||0),0);
+              const ggMax=scad.length?Math.max(...scad.map(p=>Math.floor((new Date(oggi)-new Date(scadEff(p)))/86400000))):0;
+              return {c,open,dovuto,scaduto,ggMax,liv:livOggi(ggMax,c.trattamento||"normale")};
+            }).filter(Boolean)
+              .filter(r=>!q||r.c.nome.toLowerCase().includes(q))
+              .filter(r=>!solSoloScad||r.scaduto>0)
+              .sort((a,b)=>b.scaduto-a.scaduto||b.dovuto-a.dovuto);
+            const totScad=righe.reduce((s,r)=>s+r.scaduto,0), totDov=righe.reduce((s,r)=>s+r.dovuto,0);
+            const setCli=async(id,patch)=>{ try{ await sbUpdate("clienti",`id=eq.${id}`,patch); setFoglio(f=>({...f,clienti:f.clienti.map(x=>x.id===id?{...x,...patch}:x)})); }catch(e){ alert("Errore: "+e.message); } };
+            const setScad=async(pid,v)=>{ try{ await sbUpdate("proforme",`id=eq.${pid}`,{scadenza:v}); setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===pid?{...x,scadenza:v}:x)})); }catch(e){ alert("Errore: "+e.message); } };
+            const COL=[S.warn,S.warn,S.warnD,C.red,C.red];
+            return (
+            <div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:12}}>
+                <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>CLIENTI IN ELENCO</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{righe.length}</p></div>
+                <div style={{background:"var(--color-surface)",border:`1px solid ${C.red}44`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.red,fontWeight:600}}>SCADUTO</p><p style={{margin:0,fontSize:17,fontWeight:700,color:C.red}}>{fmt(totScad)}</p></div>
+                <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>DOVUTO TOTALE</p><p style={{margin:0,fontSize:17,fontWeight:700,color:S.warn}}>{fmt(totDov)}</p></div>
+              </div>
+              {!hasCanaleCol() && <p style={{margin:"0 0 10px",fontSize:11,background:S.warn+"14",border:`1px solid ${S.warn}44`,color:S.warnD,padding:"8px 12px",borderRadius:8}}>Per salvare il canale di comunicazione manca una colonna sul database. Nel SQL Editor di Supabase esegui: <code style={{fontSize:10}}>alter table clienti add column if not exists canale_sollecito text;</code> — poi Ricarica. Intanto tutto il resto funziona.</p>}
+              <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={solFilter} onChange={e=>setSolFilter(e.target.value)} placeholder="Cerca cliente..." style={{width:220,padding:"8px 10px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:12}}/>
+                {[[true,"Solo con scaduto"],[false,"Tutte le impagate"]].map(([v,l])=>(
+                  <button key={l} onClick={()=>setSolSoloScad(v)} style={{padding:"5px 12px",borderRadius:20,border:solSoloScad===v?`1.5px solid ${S.slateD}`:"0.5px solid var(--color-border-tertiary)",background:solSoloScad===v?S.slateD+"15":"transparent",color:solSoloScad===v?S.slateD:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",fontWeight:solSoloScad===v?600:400}}>{l}</button>
+                ))}
+                <span style={{marginLeft:"auto",fontSize:10,color:"var(--color-text-secondary)"}}>L'invio WhatsApp resta su WhatsApp Studio → Solleciti; qui decidi scadenze e canale.</span>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {righe.map(r=>(
+                  <div key={r.c.id} style={{background:"var(--color-surface)",border:`1px solid ${r.scaduto>0?C.red+"33":"var(--color-border-tertiary)"}`,borderRadius:11,padding:"9px 13px",boxShadow:"var(--shadow-card)",opacity:r.c.no_solleciti?.65:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <b style={{fontSize:13,cursor:"pointer"}} onClick={()=>openClientPdfs(r.c.nome)} title="Apri la scheda cliente (PDF, incassi, note)">📂 {r.c.nome}</b>
+                      {r.c.no_solleciti
+                        ? <span style={{fontSize:9,padding:"1px 7px",borderRadius:5,background:C.redL,color:C.red,fontWeight:700}}>🔕 escluso dai solleciti</span>
+                        : r.liv>0 && <span style={{fontSize:9,padding:"1px 7px",borderRadius:5,background:COL[r.liv]+"1a",color:COL[r.liv],fontWeight:700}}>{r.ggMax}gg → L{r.liv}{r.liv===4?" sospensione":""}</span>}
+                      <span style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:r.scaduto>0?C.red:S.warn}}>{r.scaduto>0?`scaduto ${fmt(r.scaduto)}`:fmt(r.dovuto)}</span>
+                      {r.scaduto>0 && r.scaduto<r.dovuto && <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>su {fmt(r.dovuto)}</span>}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginTop:5}}>
+                      <select value={r.c.trattamento||"normale"} onChange={e=>setCli(r.c.id,{trattamento:e.target.value})} title="Tono dei solleciti: cortese si ferma a L2, monitorato ha soglie più strette" style={{padding:"3px 6px",borderRadius:6,border:"0.5px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10}}>
+                        {TRATT.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                      </select>
+                      {hasCanaleCol() && (
+                        <select value={r.c.canale_sollecito||"whatsapp"} onChange={e=>setCli(r.c.id,{canale_sollecito:e.target.value})} title="Come contattare questo cliente per i pagamenti" style={{padding:"3px 6px",borderRadius:6,border:`1px solid ${(r.c.canale_sollecito||"whatsapp")==="whatsapp"?"var(--color-border-secondary)":S.slateD}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,fontWeight:600}}>
+                          {CANALI.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                        </select>
+                      )}
+                      <button onClick={()=>setCli(r.c.id,{no_solleciti:!r.c.no_solleciti})} title={r.c.no_solleciti?"Riattiva i solleciti":"Escludi dai solleciti"} style={{background:"none",border:"0.5px solid var(--color-border-tertiary)",borderRadius:6,padding:"2px 7px",cursor:"pointer",fontSize:11}}>{r.c.no_solleciti?"🔕":"🔔"}</button>
+                    </div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:6,paddingLeft:2}}>
+                      {r.open.map(p=>{ const sc=scadEff(p), std=PERIOD_DEADLINE[p.periodo], isScad=sc&&sc<oggi; return (
+                        <span key={p.id} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,background:isScad?C.red+"08":"var(--color-background-secondary)",border:`0.5px solid ${isScad?C.red+"33":"var(--color-border-tertiary)"}`,borderRadius:7,padding:"3px 7px"}}>
+                          <span style={{fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
+                          <span style={{fontWeight:600,color:isScad?C.red:S.warnD}}>{fmt(p.importo)}</span>
+                          <input type="date" value={p.scadenza||sc||""} onChange={e=>setScad(p.id,e.target.value||null)} title={"Scadenza per i solleciti (standard: "+(std?fmtD(std):"—")+")"} style={{padding:"1px 4px",borderRadius:5,border:`1px solid ${p.scadenza?S.warnD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:108}}/>
+                          {[["+15g",15],["+30g",30]].map(([lbl,gg])=>(
+                            <button key={lbl} onClick={()=>{ const d=new Date(); d.setDate(d.getDate()+gg); setScad(p.id,d.toISOString().slice(0,10)); }} title={`Rinvia a ${gg} giorni da oggi`} style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:5,padding:"0 4px",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:9}}>{lbl}</button>
+                          ))}
+                          {p.scadenza && <button onClick={()=>setScad(p.id,null)} title="Torna alla scadenza standard" style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:10,padding:0}}>↺</button>}
+                        </span>
+                      );})}
+                    </div>
+                  </div>
+                ))}
+                {righe.length===0 && <p style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",padding:18}}>{solSoloScad?"Nessun cliente con proforme scadute":"Nessuna proforma impagata"}{q?` per "${solFilter}"`:""}.</p>}
+              </div>
+            </div>
+            );
+          })()}
 
           {/* ══ PAGAMENTI ══ */}
           {tab==="pagamenti" && (()=>{
