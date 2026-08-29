@@ -1433,7 +1433,9 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const openClientPdfs = async(nomeCliente)=>{
         setIncMsg("");
         const f=await findYdFolder(nomeCliente);
-        if(!f){ const msg=`⚠ Cartella Yandex non trovata per "${nomeCliente}" (token Yandex configurato?).`; setIncMsg(msg); if(tab!=="incassi") alert(msg); return; }
+        // Senza cartella Yandex (o senza token) la scheda si apre COMUNQUE:
+        // riepilogo, proforme e incassi vengono dal Foglio; mancheranno solo i PDF.
+        if(!f){ setIncPdfCli(nomeCliente); setIncMsg(`⚠ Cartella Yandex non trovata per "${nomeCliente}" (token Yandex configurato?): riepilogo senza PDF.`); return; }
         setIncPdfCli(f.name);
         if(!cliFiles[f.name]) loadClientFiles(f);
       };
@@ -3022,6 +3024,7 @@ In italiano, con numeri ed euro.`,
                   <div key={r.c.id} style={{background:"var(--color-surface)",border:`1px solid ${r.scaduto>0?C.red+"33":"var(--color-border-tertiary)"}`,borderRadius:11,padding:"9px 13px",boxShadow:"var(--shadow-card)",opacity:r.c.no_solleciti?.65:1}}>
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                       <b style={{fontSize:13,cursor:"pointer"}} onClick={()=>openClientPdfs(r.c.nome)} title="Apri la scheda cliente (PDF, incassi, note)">📂 {r.c.nome}</b>
+                      <button onClick={()=>openClientPdfs(r.c.nome)} title="Apri le notule PDF del cliente (da pagare e pagate) dalla cartella Yandex, con riepilogo incassi e note" style={{background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:7,padding:"3px 9px",cursor:"pointer",fontSize:10,fontWeight:600,color:C.purple,display:"inline-flex",alignItems:"center",gap:4}}>📄 Notule</button>
                       {r.c.no_solleciti
                         ? <span style={{fontSize:9,padding:"1px 7px",borderRadius:5,background:C.redL,color:C.red,fontWeight:700}}>🔕 escluso dai solleciti</span>
                         : r.liv>0 && <span style={{fontSize:9,padding:"1px 7px",borderRadius:5,background:COL[r.liv]+"1a",color:COL[r.liv],fontWeight:700}}>{r.ggMax}gg → L{r.liv}{r.liv===4?" sospensione":""}</span>}
