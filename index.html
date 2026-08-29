@@ -2970,29 +2970,44 @@ In italiano, con numeri ed euro.`,
             // livello di sollecito che scatterebbe oggi (stesse soglie della scheda cliente / WhatsApp Studio)
             const livOggi=(gg,tr)=>{ const SOG=tr==="cortese"?[15,45]:tr==="monitorato"?[5,10,20,30]:[7,15,30,45]; const maxL=tr==="cortese"?2:4; let liv=0; SOG.forEach((s,i)=>{ if(gg>=s && i+1<=maxL) liv=i+1; }); return liv; };
             const q=solFilter.trim().toLowerCase();
-            const righe=foglio.clienti.map(c=>{
+            // TUTTO il debito: proforme impagate (qualsiasi anno) + arretrati ante-2026
+            // (il pre-2026 è nel DB come numero unico per cliente, importato dall'Excel:
+            // non esistono proforme 2025 singole da elencare)
+            const tutte=foglio.clienti.map(c=>{
               const open=foglio.proforme.filter(p=>p.cliente_id===c.id && !p.pagato && Number(p.importo)>0)
                 .sort((a,b)=>String(scadEff(a)||"9999").localeCompare(String(scadEff(b)||"9999")));
-              if(!open.length) return null;
-              const dovuto=open.reduce((s,p)=>s+(Number(p.importo)||0),0);
+              const arr=Number(c.arretrati)||0;
+              if(!open.length && arr<=0) return null;
+              const dovuto=arr+open.reduce((s,p)=>s+(Number(p.importo)||0),0);
               const scad=open.filter(p=>{ const sc=scadEff(p); return sc && sc<oggi; });
-              const scaduto=scad.reduce((s,p)=>s+(Number(p.importo)||0),0);
+              const scaduto=arr+scad.reduce((s,p)=>s+(Number(p.importo)||0),0); // gli arretrati sono per definizione scaduti
               const ggMax=scad.length?Math.max(...scad.map(p=>Math.floor((new Date(oggi)-new Date(scadEff(p)))/86400000))):0;
-              return {c,open,dovuto,scaduto,ggMax,liv:livOggi(ggMax,c.trattamento||"normale")};
-            }).filter(Boolean)
+              return {c,open,arr,dovuto,scaduto,ggMax,liv:livOggi(ggMax,c.trattamento||"normale")};
+            }).filter(Boolean);
+            // totali su TUTTO, indipendenti dai filtri: devono combaciare con la Dashboard
+            const totDov=tutte.reduce((s,r)=>s+r.dovuto,0), totScad=tutte.reduce((s,r)=>s+r.scaduto,0), totArr=tutte.reduce((s,r)=>s+r.arr,0);
+            const righe=tutte
               .filter(r=>!q||r.c.nome.toLowerCase().includes(q))
               .filter(r=>!solSoloScad||r.scaduto>0)
               .sort((a,b)=>b.scaduto-a.scaduto||b.dovuto-a.dovuto);
-            const totScad=righe.reduce((s,r)=>s+r.scaduto,0), totDov=righe.reduce((s,r)=>s+r.dovuto,0);
             const setCli=async(id,patch)=>{ try{ await sbUpdate("clienti",`id=eq.${id}`,patch); setFoglio(f=>({...f,clienti:f.clienti.map(x=>x.id===id?{...x,...patch}:x)})); }catch(e){ alert("Errore: "+e.message); } };
             const setScad=async(pid,v)=>{ try{ await sbUpdate("proforme",`id=eq.${pid}`,{scadenza:v}); setFoglio(f=>({...f,proforme:f.proforme.map(x=>x.id===pid?{...x,scadenza:v}:x)})); }catch(e){ alert("Errore: "+e.message); } };
+            // Nuova scadenza per TUTTE le proforme aperte del cliente in un colpo solo
+            const setScadTutte=async(r,v)=>{
+              if(!confirm(`Impostare ${fmtD(v)} come scadenza di tutte le ${r.open.length} proforme aperte di ${r.c.nome}?`)) return;
+              try{
+                for(const p of r.open){ await sbUpdate("proforme",`id=eq.${p.id}`,{scadenza:v}); }
+                setFoglio(f=>({...f,proforme:f.proforme.map(x=> r.open.some(o=>o.id===x.id)?{...x,scadenza:v}:x)}));
+              }catch(e){ alert("Errore: "+e.message); }
+            };
             const COL=[S.warn,S.warn,S.warnD,C.red,C.red];
             return (
             <div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:12}}>
-                <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>CLIENTI IN ELENCO</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{righe.length}</p></div>
+                <div style={{background:"var(--color-surface)",border:"1px solid var(--color-border-tertiary)",borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>CLIENTI CON DEBITO</p><p style={{margin:0,fontSize:19,fontWeight:700}}>{tutte.length}{righe.length!==tutte.length?<span style={{fontSize:11,fontWeight:500,color:"var(--color-text-secondary)"}}> · {righe.length} in vista</span>:null}</p></div>
                 <div style={{background:"var(--color-surface)",border:`1px solid ${C.red}44`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:C.red,fontWeight:600}}>SCADUTO</p><p style={{margin:0,fontSize:17,fontWeight:700,color:C.red}}>{fmt(totScad)}</p></div>
-                <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}}><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>DOVUTO TOTALE</p><p style={{margin:0,fontSize:17,fontWeight:700,color:S.warn}}>{fmt(totDov)}</p></div>
+                <div style={{background:"var(--color-surface)",border:`1px solid ${C.red}33`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}} title="Debito precedente al 2026, importato dall'Excel come importo unico per cliente: non esistono proforme 2025 singole nel Foglio"><p style={{margin:"0 0 2px",fontSize:10,color:C.red,fontWeight:600}}>DI CUI ARRETRATI ANTE-2026</p><p style={{margin:0,fontSize:17,fontWeight:700,color:C.red}}>{fmt(totArr)}</p></div>
+                <div style={{background:"var(--color-surface)",border:`1px solid ${S.warn}55`,borderRadius:12,padding:"10px 12px",boxShadow:"var(--shadow-card)"}} title="Proforme impagate + arretrati: stesso totale della Dashboard"><p style={{margin:"0 0 2px",fontSize:10,color:S.warn,fontWeight:600}}>DOVUTO TOTALE</p><p style={{margin:0,fontSize:17,fontWeight:700,color:S.warn}}>{fmt(totDov)}</p></div>
               </div>
               {!hasCanaleCol() && <p style={{margin:"0 0 10px",fontSize:11,background:S.warn+"14",border:`1px solid ${S.warn}44`,color:S.warnD,padding:"8px 12px",borderRadius:8}}>Per salvare il canale di comunicazione manca una colonna sul database. Nel SQL Editor di Supabase esegui: <code style={{fontSize:10}}>alter table clienti add column if not exists canale_sollecito text;</code> — poi Ricarica. Intanto tutto il resto funziona.</p>}
               <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
@@ -3023,11 +3038,26 @@ In italiano, con numeri ed euro.`,
                         </select>
                       )}
                       <button onClick={()=>setCli(r.c.id,{no_solleciti:!r.c.no_solleciti})} title={r.c.no_solleciti?"Riattiva i solleciti":"Escludi dai solleciti"} style={{background:"none",border:"0.5px solid var(--color-border-tertiary)",borderRadius:6,padding:"2px 7px",cursor:"pointer",fontSize:11}}>{r.c.no_solleciti?"🔕":"🔔"}</button>
+                      {r.open.length>1 && (
+                        <span style={{display:"inline-flex",alignItems:"center",gap:4,marginLeft:"auto",fontSize:10,color:"var(--color-text-secondary)"}}>
+                          <span style={{fontWeight:600}}>scad. per tutte:</span>
+                          <input type="date" value="" onChange={e=>{ if(e.target.value) setScadTutte(r,e.target.value); }} title={`Imposta la stessa scadenza su tutte le ${r.open.length} proforme aperte (chiede conferma)`} style={{padding:"1px 4px",borderRadius:5,border:"1px solid var(--color-border-secondary)",background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:108}}/>
+                          {[["+15g",15],["+30g",30]].map(([lbl,gg])=>(
+                            <button key={lbl} onClick={()=>{ const d=new Date(); d.setDate(d.getDate()+gg); setScadTutte(r,d.toISOString().slice(0,10)); }} title={`Rinvia tutte a ${gg} giorni da oggi (chiede conferma)`} style={{background:"var(--color-surface)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:5,padding:"0 5px",color:"var(--color-text-secondary)",cursor:"pointer",fontSize:9}}>{lbl}</button>
+                          ))}
+                        </span>
+                      )}
                     </div>
                     <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:6,paddingLeft:2}}>
+                      {r.arr>0 && (
+                        <span title="Debito precedente al 2026, importato dall'Excel come importo unico: non ha proforme singole né una scadenza propria. Si riduce dal tab Clienti (campo arretrati) quando viene incassato." style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,background:C.red+"10",border:`1px solid ${C.red}44`,borderRadius:7,padding:"3px 7px"}}>
+                          <span style={{fontWeight:700,color:C.red}}>arretrati ante-2026</span>
+                          <span style={{fontWeight:700,color:C.red}}>{fmt(r.arr)}</span>
+                        </span>
+                      )}
                       {r.open.map(p=>{ const sc=scadEff(p), std=PERIOD_DEADLINE[p.periodo], isScad=sc&&sc<oggi; return (
                         <span key={p.id} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,background:isScad?C.red+"08":"var(--color-background-secondary)",border:`0.5px solid ${isScad?C.red+"33":"var(--color-border-tertiary)"}`,borderRadius:7,padding:"3px 7px"}}>
-                          <span style={{fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}</span>
+                          <span style={{fontWeight:600}}>{PLABEL[p.periodo]||p.periodo}{p.anno&&p.anno!==2026?` ${p.anno}`:""}</span>
                           <span style={{fontWeight:600,color:isScad?C.red:S.warnD}}>{fmt(p.importo)}</span>
                           <input type="date" value={p.scadenza||sc||""} onChange={e=>setScad(p.id,e.target.value||null)} title={"Scadenza per i solleciti (standard: "+(std?fmtD(std):"—")+")"} style={{padding:"1px 4px",borderRadius:5,border:`1px solid ${p.scadenza?S.warnD:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:10,width:108}}/>
                           {[["+15g",15],["+30g",30]].map(([lbl,gg])=>(
