@@ -903,6 +903,10 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         }
       }, [ydToken]);
 
+      // Il viewer ricorda da quale tab è stato aperto, così "Chiudi" torna lì
+      // (prima tornava sempre a Proforma, anche partendo da Incassi o Solleciti)
+      const viewerBackRef = useRef("fatture");
+      const goViewer = () => setTab(prev=>{ if(prev!=="viewer") viewerBackRef.current=prev; return "viewer"; });
       // Visualizza un PDF Yandex (qualsiasi file) nel viewer
       const viewYdFile = useCallback(async(item, clientName)=>{
         if (!ydToken) return;
@@ -911,7 +915,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           const { url, name } = await downloadAndStorePdf(ydToken, item.path, item.name);
           setBlobMap(m=>({...m,[item.path]:{ url, name }}));
           setViewerInv({ id:item.path, pdfPath:item.path, client:clientName||"" });
-          setTab("viewer");
+          goViewer();
         } catch(e) { setYdError("Errore apertura PDF: "+e.message); }
         setPdfLoading(false);
       }, [ydToken]);
@@ -1748,14 +1752,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       };
 
       const loadPdfForViewer = async(inv)=>{
-        if (blobMap[inv.id]) { setViewerInv(inv); setTab("viewer"); return; }
+        if (blobMap[inv.id]) { setViewerInv(inv); goViewer(); return; }
         if (!inv.pdfPath || !ydToken) { alert("PDF non disponibile. Verifica connessione Yandex."); return; }
         setPdfLoading(true);
         try {
           const { url, name } = await downloadAndStorePdf(ydToken, inv.pdfPath, inv.pdfPath.split("/").pop());
           setBlobMap(m=>({...m,[inv.id]:{ url, name }}));
           setViewerInv(inv);
-          setTab("viewer");
+          goViewer();
         } catch(e) { setYdError("Errore caricamento PDF: "+e.message); }
         setPdfLoading(false);
       };
@@ -2647,6 +2651,33 @@ In italiano, con numeri ed euro.`,
                   const cashOpen = cashCliObj ? foglio.proforme.filter(p=>p.cliente_id===cashCliObj.id && !p.pagato && Number(p.importo)>0)
                     .sort((a,b)=>String(PERIOD_DEADLINE[a.periodo]||"9999").localeCompare(String(PERIOD_DEADLINE[b.periodo]||"9999"))) : [];
                   const cashPaid = (soloRecord && cashCliObj) ? foglio.proforme.filter(p=>p.cliente_id===cashCliObj.id && p.pagato) : [];
+                  // Anteprima del PDF della proforma scelta in "Applica a": cerca il file per nome
+                  // nella cartella Yandex del cliente (anche dentro "pagato") e lo apre nel viewer.
+                  // Se il file non si trova (o la proforma non ha un PDF collegato) apre la scheda
+                  // cliente con tutte le notule: meglio una vista in più che un vicolo cieco.
+                  const cashTgt = cashPf!=="auto" ? [...cashOpen,...cashPaid].find(p=>p.id===cashPf) : cashOpen[0];
+                  const anteprimaCash = async()=>{
+                    if(!cashTgt || !cashCliObj) return;
+                    if(!ydToken){ alert("Token Yandex non configurato: i PDF non sono raggiungibili."); return; }
+                    if(!cashTgt.pdf_path){ openClientPdfs(cashCliObj.nome); return; }
+                    setPdfLoading(true);
+                    try{
+                      const f=await findYdFolder(cashCliObj.nome);
+                      if(!f){ setPdfLoading(false); openClientPdfs(cashCliObj.nome); return; }
+                      const cerca=async(path,depth)=>{
+                        const d=await ydList(ydToken,path); const items=d._embedded?.items||[];
+                        const hit=items.find(it=>it.type==="file"&&it.name===cashTgt.pdf_path);
+                        if(hit) return hit;
+                        if(depth>=3) return null;
+                        for(const dir of items.filter(it=>it.type==="dir")){ const r=await cerca(dir.path,depth+1); if(r) return r; }
+                        return null;
+                      };
+                      const hit=await cerca(f.path,0);
+                      setPdfLoading(false);
+                      if(hit) viewYdFile(hit, cashCliObj.nome);
+                      else openClientPdfs(cashCliObj.nome);
+                    }catch(e){ setPdfLoading(false); alert("Anteprima non disponibile: "+e.message); }
+                  };
                   return (
                   <div style={{marginTop:12,paddingTop:12,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
@@ -2705,6 +2736,7 @@ In italiano, con numeri ed euro.`,
                           {cashOpen.map(p=><option key={p.id} value={p.id}>{(PLABEL[p.periodo]||p.periodo)} — {fmt(p.importo)}</option>)}
                           {cashPaid.map(p=><option key={p.id} value={p.id}>✓ PAGATA {(PLABEL[p.periodo]||p.periodo)} — {fmt(p.importo)} (solo riferimento)</option>)}
                         </select>
+                        {cashTgt && <button onClick={anteprimaCash} disabled={pdfLoading} title={cashTgt.pdf_path?`Apri l'anteprima di ${cashTgt.pdf_path}${cashPf==="auto"?" (la proforma che verrebbe saldata)":""}`:"Questa proforma non ha un PDF collegato: apre la scheda cliente con tutte le notule"} style={{padding:"6px 10px",background:C.purpleL,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,fontWeight:600,color:C.purple,cursor:pdfLoading?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4}}>{pdfLoading?"Apro...":"📄 Anteprima"}</button>}
                         <label title="Registra il pagamento solo a registro incassi, SENZA toccare le proforme: usalo quando la notula risulta già in pagato (il dovuto è già corretto)" style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:600,color:soloRecord?S.warnD:"var(--color-text-secondary)",cursor:"pointer",padding:"5px 8px",borderRadius:7,border:`1px solid ${soloRecord?S.warnD:"var(--color-border-tertiary)"}`,background:soloRecord?S.warnD+"14":"transparent"}}>
                           <input type="checkbox" checked={soloRecord} onChange={e=>{setSoloRecord(e.target.checked); setCashPf("auto");}} style={{margin:0}}/>
                           📝 Solo per record (non tocca il dovuto)
@@ -3226,7 +3258,7 @@ In italiano, con numeri ed euro.`,
                       <span style={{fontSize:13,fontWeight:500,color:C.purple,display:"flex",alignItems:"center",gap:6}}><i className="ti ti-sparkles"/>Estratto: {pdfResult.fileName}</span>
                       <div style={{display:"flex",gap:6}}>
                         {!pdfResult.data.parse_error && <button onClick={importInvoice} style={{padding:"5px 12px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4}}><i className="ti ti-plus"/>Importa</button>}
-                        <button onClick={()=>{setViewerInv({id:"__preview__",pdfPath:pdfResult.path}); setBlobMap(m=>({...m,__preview__:{url:pdfResult.url,name:pdfResult.fileName}})); setTab("viewer");}} style={{padding:"5px 10px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-eye"/>Visualizza</button>
+                        <button onClick={()=>{setViewerInv({id:"__preview__",pdfPath:pdfResult.path}); setBlobMap(m=>({...m,__preview__:{url:pdfResult.url,name:pdfResult.fileName}})); goViewer();}} style={{padding:"5px 10px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-eye"/>Visualizza</button>
                         <button onClick={()=>setPdfResult(null)} style={{background:"none",border:"none",color:"var(--color-text-secondary)",cursor:"pointer"}}><i className="ti ti-x"/></button>
                       </div>
                     </div>
@@ -3683,7 +3715,7 @@ In italiano, con numeri ed euro.`,
                 </div>
                 <div style={{display:"flex",gap:6}}>
                   <a href={blobMap[viewerInv.id].url} download={blobMap[viewerInv.id].name} style={{padding:"5px 12px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,textDecoration:"none",display:"flex",alignItems:"center",gap:4}}><i className="ti ti-download"/>Scarica</a>
-                  <button onClick={()=>{setViewerInv(null);setTab("fatture");}} style={{padding:"5px 10px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:7,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-x"/>Chiudi</button>
+                  <button onClick={()=>{setViewerInv(null);setTab(viewerBackRef.current||"fatture");}} style={{padding:"5px 10px",background:"transparent",border:"0.5px solid var(--color-border-tertiary)",borderRadius:7,fontSize:11,cursor:"pointer",color:"var(--color-text-secondary)",display:"flex",alignItems:"center",gap:3}}><i className="ti ti-x"/>Chiudi</button>
                 </div>
               </div>
               <div style={{border:`1px solid ${C.purple}44`,borderRadius:12,overflow:"hidden",background:"#525659"}}>
