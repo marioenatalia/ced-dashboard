@@ -2656,17 +2656,17 @@ In italiano, con numeri ed euro.`,
                   // Se il file non si trova (o la proforma non ha un PDF collegato) apre la scheda
                   // cliente con tutte le notule: meglio una vista in più che un vicolo cieco.
                   const cashTgt = cashPf!=="auto" ? [...cashOpen,...cashPaid].find(p=>p.id===cashPf) : cashOpen[0];
-                  const anteprimaCash = async()=>{
-                    if(!cashTgt || !cashCliObj) return;
+                  const apriPdfProforma = async(pf)=>{
+                    if(!pf || !cashCliObj) return;
                     if(!ydToken){ alert("Token Yandex non configurato: i PDF non sono raggiungibili."); return; }
-                    if(!cashTgt.pdf_path){ openClientPdfs(cashCliObj.nome); return; }
+                    if(!pf.pdf_path){ openClientPdfs(cashCliObj.nome); return; }
                     setPdfLoading(true);
                     try{
                       const f=await findYdFolder(cashCliObj.nome);
                       if(!f){ setPdfLoading(false); openClientPdfs(cashCliObj.nome); return; }
                       const cerca=async(path,depth)=>{
                         const d=await ydList(ydToken,path); const items=d._embedded?.items||[];
-                        const hit=items.find(it=>it.type==="file"&&it.name===cashTgt.pdf_path);
+                        const hit=items.find(it=>it.type==="file"&&it.name===pf.pdf_path);
                         if(hit) return hit;
                         if(depth>=3) return null;
                         for(const dir of items.filter(it=>it.type==="dir")){ const r=await cerca(dir.path,depth+1); if(r) return r; }
@@ -2678,6 +2678,7 @@ In italiano, con numeri ed euro.`,
                       else openClientPdfs(cashCliObj.nome);
                     }catch(e){ setPdfLoading(false); alert("Anteprima non disponibile: "+e.message); }
                   };
+                  const anteprimaCash = ()=>apriPdfProforma(cashTgt);
                   return (
                   <div style={{marginTop:12,paddingTop:12,borderTop:"0.5px solid var(--color-border-tertiary)"}}>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
@@ -2759,6 +2760,19 @@ In italiano, con numeri ed euro.`,
                           </>);
                         })()}
                         <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>{cashOpen.length} proforme aperte</span>
+                      </div>
+                    )}
+                    {cashCliObj && (cashOpen.length>0 || cashPaid.length>0) && (
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:6}}>
+                        <span style={{fontSize:10,color:"var(--color-text-secondary)",fontWeight:600}}>Verifica da Yandex:</span>
+                        {[...cashOpen,...cashPaid].map(p=>(
+                          <button key={p.id} onClick={()=>apriPdfProforma(p)} disabled={pdfLoading}
+                            title={p.pdf_path?`Apri ${p.pdf_path} da Yandex per controllare il documento`:"Nessun PDF collegato a questa proforma: apre la scheda cliente con tutte le notule"}
+                            style={{padding:"4px 9px",background:p.id===cashPf?C.purple+"22":"var(--color-background-secondary)",border:`1px solid ${p.id===cashPf?C.purple:(p.pagato?"var(--color-border-tertiary)":C.purple+"33")}`,borderRadius:7,fontSize:11,fontWeight:600,color:p.pagato?"var(--color-text-secondary)":C.purple,cursor:pdfLoading?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4}}>
+                            📄 {PLABEL[p.periodo]||p.periodo} · {fmt(p.importo)}{p.pagato?" ✓":""}
+                          </button>
+                        ))}
+                        {pdfLoading && <span style={{fontSize:10,color:"var(--color-text-secondary)"}}>apro il PDF...</span>}
                       </div>
                     )}
                     {cashCliObj && (()=>{ const tgt = cashPf!=="auto" ? [...cashOpen,...cashPaid].find(p=>p.id===cashPf) : cashOpen[0];
