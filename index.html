@@ -185,7 +185,13 @@
     const todayStr = () => new Date().toISOString().split("T")[0];
 
     // ── Supabase (REST) — URL + publishable key salvati in localStorage ──
-    const sbCfg = () => ({ url:(localStorage.getItem("ced_sb_url")||"").replace(/\/+$/,""), key:localStorage.getItem("ced_sb_key")||"" });
+    // Coordinate predefinite del Foglio: così lo staff che entra dal portale vede i dati
+    // senza dover incollare nulla (prima ogni browser andava configurato a mano e chi non
+    // lo faceva trovava la dashboard vuota). Un valore incollato nel tab Foglio ha comunque
+    // la precedenza. La chiave è la publishable già presente nel repo (keepalive.yml):
+    // la protezione dei dati non dipende da lei ma dalle regole RLS sul database.
+    const DEFAULT_SB = { url:"https://zncwwxuthnghguhmmkky.supabase.co", key:"sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX" };
+    const sbCfg = () => ({ url:((localStorage.getItem("ced_sb_url")||DEFAULT_SB.url)).replace(/\/+$/,""), key:localStorage.getItem("ced_sb_key")||DEFAULT_SB.key });
     const sbReady = () => { const c=sbCfg(); return !!(c.url && c.key); };
     async function sbReq(method, pathQ, body) {
       const c = sbCfg(); if(!c.url||!c.key) throw new Error("Supabase non configurato");
@@ -1439,7 +1445,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         const f=await findYdFolder(nomeCliente);
         // Senza cartella Yandex (o senza token) la scheda si apre COMUNQUE:
         // riepilogo, proforme e incassi vengono dal Foglio; mancheranno solo i PDF.
-        if(!f){ setIncPdfCli(nomeCliente); setIncMsg(`⚠ Cartella Yandex non trovata per "${nomeCliente}" (token Yandex configurato?): riepilogo senza PDF.`); return; }
+        // Va scritto uno stato esplicito in cliFiles, altrimenti la sezione documenti
+        // resta su "Carico l'elenco da Yandex..." all'infinito (caricamento mai partito).
+        if(!f){
+          setIncPdfCli(nomeCliente);
+          setCliFiles(m=>({...m,[nomeCliente]:{loading:false, open:[], paid:[], error: ydToken?`cartella Yandex non trovata per "${nomeCliente}" — controlla il nome della cartella`:"token Yandex non configurato in questo browser"}}));
+          setIncMsg(`⚠ Cartella Yandex non trovata per "${nomeCliente}": riepilogo senza PDF.`);
+          return;
+        }
         setIncPdfCli(f.name);
         if(!cliFiles[f.name]) loadClientFiles(f);
       };
