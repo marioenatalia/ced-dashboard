@@ -1575,11 +1575,22 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           hr.forEach((c,i)=>{ const t=String(c).toLowerCase(); if(t.includes("data operazione"))col.data=i; else if(t.includes("descrizione"))col.desc=i; else if(t.includes("entrate"))col.ent=i; });
           // Esclusi dal perimetro CED (non clienti): compensi partner, fornitori, ecc.
           const EXCL_BANCA=/METIS\s*CONSULTING|TEAMSYSTEM|CONTI\s+GEREMIA/i;
-          const movs=[]; let saltatiData=0;
+          const movs=[]; let saltatiData=0; const saltatiNonReg=[];
           for(let i=h+1;i<g.length;i++){
             const r=g[i]; const ent=parseFloat(r[col.ent]); if(!(ent>0)) continue;
             const data=parseItDate(r[col.data]); const desc=String(r[col.desc]||"").trim();
-            if(incDaData && data && data<incDaData){ saltatiData++; continue; }
+            if(incDaData && data && data<incDaData){
+              saltatiData++;
+              // Un movimento scartato dal filtro data potrebbe non essere MAI stato registrato
+              // (caso JAVED KAILASH: bonifico del 30/06, primo giorno dell'estratto, filtro dal
+              // 08/07 → mai visto, proforme rimaste aperte e sollecito improprio in canna).
+              // Qui si controlla il registro e si avvisa invece di tacere.
+              const key0=(data||"")+"|"+ent.toFixed(2)+"|"+desc.slice(0,40);
+              const m0=desc.match(/o\/c:\s*(.+?)(?:\s+ABI-CAB|\s{2,}|$)/);
+              const nome0=(m0?m0[1]:desc.slice(0,45)).trim();
+              if(!EXCL_BANCA.test(nome0)&&!EXCL_BANCA.test(desc)&&!(foglio.pagamenti||[]).some(pg=>pg.mov_key===key0)) saltatiNonReg.push({nome:nome0,importo:ent,data});
+              continue;
+            }
             const m=desc.match(/o\/c:\s*(.+?)(?:\s+ABI-CAB|\s{2,}|$)/);
             const nome=(m?m[1]:desc.slice(0,45)).trim();
             const key=(data||"")+"|"+ent.toFixed(2)+"|"+desc.slice(0,40);
@@ -1590,7 +1601,13 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
           setIncMovs(movs);
           LS.setRaw("ced_inc_dadata", incDaData||"");
           const nuovi=movs.filter(m=>!m.state);
-          setIncMsg(`Letti ${movs.length} incassi (${fmt(movs.reduce((s,m)=>s+m.importo,0))}) · ${nuovi.length} da gestire · ${movs.filter(m=>m.dup).length} già registrati · ${movs.filter(m=>m.escl).length} esclusi (non CED)${saltatiData?` · ${saltatiData} prima del ${fmtD(incDaData)}`:""} · ${nuovi.filter(m=>m.cliente).length} abbinati automaticamente.`);
+          let msg=`Letti ${movs.length} incassi (${fmt(movs.reduce((s,m)=>s+m.importo,0))}) · ${nuovi.length} da gestire · ${movs.filter(m=>m.dup).length} già registrati · ${movs.filter(m=>m.escl).length} esclusi (non CED)${saltatiData?` · ${saltatiData} prima del ${fmtD(incDaData)}`:""} · ${nuovi.filter(m=>m.cliente).length} abbinati automaticamente.`;
+          if(saltatiNonReg.length){
+            const tot=saltatiNonReg.reduce((s,x)=>s+x.importo,0);
+            const nomi=saltatiNonReg.slice(0,4).map(x=>`${x.nome} (${fmtD(x.data)}, ${fmt(x.importo)})`).join(", ");
+            msg+=` ⚠ ATTENZIONE: ${saltatiNonReg.length} movimenti scartati dal filtro data NON risultano a registro (${fmt(tot)}): ${nomi}${saltatiNonReg.length>4?" e altri":""}. Se non sono già nell'Excel, togli il filtro e ricarica l'estratto: i già registrati non si duplicano.`;
+          }
+          setIncMsg(msg);
         }catch(e){ setIncMsg("Errore lettura estratto: "+e.message); }
         setIncBusy(false);
       };
