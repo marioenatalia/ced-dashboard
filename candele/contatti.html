@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contatti · Vera Candles</title>
+<meta name="description" content="Contatta l’atelier Vera Candles: consigli d’acquisto, ordini, visite su appuntamento, domande frequenti su spedizioni, resi e cura delle candele.">
+<meta name="theme-color" content="#FBF8F4">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Jost:wght@200;300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<header class="shop-head">
+  <div class="wrap">
+    <div class="reveal" style="max-width:720px">
+      <p class="eyebrow">Contatti</p>
+      <h1 style="font-size:clamp(2.6rem,6vw,4.4rem)">Ti rispondiamo noi,<br>non un centralino.</h1>
+      <hr class="rule">
+      <p class="lede">Consigli su quale pezzo scegliere, stato di un ordine, visite in atelier: scrivici come preferisci. In genere rispondiamo in giornata, sempre entro il giorno lavorativo successivo.</p>
+    </div>
+  </div>
+</header>
+
+<section class="section" style="padding-top:clamp(42px,6vw,74px)">
+  <div class="wrap split split--wide-left">
+    <form id="contact-form" class="reveal" novalidate>
+      <div class="field">
+        <label for="oggetto">Di cosa si tratta</label>
+        <select id="oggetto" name="oggetto">
+          <option>Consiglio d’acquisto</option>
+          <option>Informazioni su un ordine</option>
+          <option>Progetto su misura</option>
+          <option>Visita in atelier</option>
+          <option>Collaborazioni e rivendita</option>
+          <option>Altro</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="nome">Nome e cognome</label><input id="nome" name="nome" required></div>
+        <div class="field"><label for="email">Email</label><input id="email" type="email" name="email" required></div>
+      </div>
+      <div class="field"><label for="telefono">Telefono (facoltativo)</label><input id="telefono" name="telefono" inputmode="tel"></div>
+      <div class="field"><label for="messaggio">Messaggio</label>
+        <textarea id="messaggio" name="messaggio" placeholder="Scrivi qui: per chi è il regalo, in che stanza andrà la candela, che profumi ami…" required></textarea>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px">
+        <button class="btn" type="submit">Invia il messaggio</button>
+        <a class="btn btn--ghost" data-wa target="_blank" rel="noopener">Scrivici su WhatsApp</a>
+      </div>
+      <p class="form-note">Il modulo apre il tuo programma di posta con il messaggio già scritto: ti basta premere invio.</p>
+    </form>
+
+    <aside class="panel reveal delay-1">
+      <p class="eyebrow">Atelier</p>
+      <h3 style="margin-bottom:16px">Vieni a vedere<br>come si fa</h3>
+      <p style="font-size:.92rem;color:var(--ink-2)">Apriamo l’atelier su appuntamento: si guardano i pezzi dal vivo, si annusano le cere e si sceglie con calma. Anche solo per curiosità.</p>
+      <dl style="display:grid;grid-template-columns:auto 1fr;gap:10px 20px;margin:26px 0 0;font-size:.9rem">
+        <dt style="color:var(--ink-3)">Indirizzo</dt><dd style="margin:0" data-indirizzo></dd>
+        <dt style="color:var(--ink-3)">Email</dt><dd style="margin:0"><a data-email class="link-under" style="border:0;text-transform:none;letter-spacing:0;font-size:.9rem"></a></dd>
+        <dt style="color:var(--ink-3)">Telefono</dt><dd style="margin:0" data-telefono></dd>
+        <dt style="color:var(--ink-3)">Orari</dt><dd style="margin:0">Mar – Sab, 10:30 – 18:30<br>su appuntamento</dd>
+      </dl>
+      <p style="margin-top:28px"><a class="link-under" data-wa target="_blank" rel="noopener">Prenota una visita</a></p>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================================================== FAQ -->
+<section class="section section--sand" id="faq">
+  <div class="wrap" style="max-width:900px">
+    <div class="center reveal" style="margin-bottom:clamp(30px,4vw,54px)">
+      <p class="eyebrow">Domande frequenti</p>
+      <h2>Le cose che ci chiedete sempre</h2>
+      <hr class="rule rule--center">
+    </div>
+
+    <div class="accordion reveal" data-faq>
+      <div class="accordion__item is-open">
+        <button class="accordion__btn">Perché costa più di una candela normale<i>+</i></button>
+        <div class="accordion__panel"><div><p>Perché non è la stessa cosa. La cera è soia biologica e cera d’api, il profumo è costruito con oli essenziali e assolute (un’assoluta di rosa costa oltre cento volte un aroma sintetico), i vasi sono soffiati a bocca, torniti o smaltati a mano. A questo si somma il tempo: sette-quindici giorni per pezzo, tra colata, riposo e rifinitura, con gli scarti a nostro carico.</p></div></div>
+      </div>
+      <div class="accordion__item">
+        <button class="accordion__btn">Quanto dura davvero una candela<i>+</i></button>
+        <div class="accordion__panel"><div><p>Da 48 a 85 ore secondo il formato: lo trovi indicato nella scheda tecnica di ogni pezzo. Con la prima accensione fatta bene (cera sciolta fino al bordo) e lo stoppino accorciato a 5 mm ogni volta, la durata reale arriva spesso oltre il valore dichiarato.</p></div></div>
+      </div>
+      <div class="accordion__item">
+        <button class="accordion__btn">Come si accende la prima volta<i>+</i></button>
+        <div class="accordion__panel"><div><p>Lasciala accesa finché la cera è liquida fino al bordo: circa due ore. È il passaggio che evita il “cratere” centrale e fa durare la candela il doppio. Poi mai oltre quattro ore per volta, lontano da correnti d’aria e sempre su una superficie stabile.</p></div></div>
+      </div>
+      <div class="accordion__item">
+        <button class="accordion__btn">Spedite in tutta Italia? E all’estero?<i>+</i></button>
+        <div class="accordion__panel"><div><p>Sì, in Italia con corriere assicurato in 2–4 giorni lavorativi, offerta sopra € 200. Per l’estero prepariamo un preventivo dedicato: scrivici indicando città e paese.</p></div></div>
+      </div>
+      <div class="accordion__item">
+        <button class="accordion__btn">Posso restituire un pezzo<i>+</i></button>
+        <div class="accordion__panel"><div><p>Entro 14 giorni, se integro e mai acceso, nella confezione originale. Rimborsiamo entro cinque giorni dal rientro. I progetti su misura, essendo realizzati su richiesta, non sono rendibili.</p></div></div>
+      </div>
+      <div class="accordion__item">
+        <button class="accordion__btn">Come funziona il pagamento<i>+</i></button>
+        <div class="accordion__panel"><div><p>Completi l’ordine sul sito e ci arriva via WhatsApp o email con tutto il riepilogo. Ti rispondiamo con la conferma della disponibilità e i dati per il pagamento: bonifico oppure link sicuro per carta. La spedizione parte a pagamento ricevuto.</p></div></div>
+      </div>
+      <div class="accordion__item">
+        <button class="accordion__btn">Fate confezioni regalo e dediche<i>+</i></button>
+        <div class="accordion__panel"><div><p>Sì: scatola in cartoncino sabbia, nastro in seta e biglietto scritto a mano con la tua dedica (€ 15). Si aggiunge in fase d’ordine, insieme al testo che vuoi far scrivere.</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="assets/js/products.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

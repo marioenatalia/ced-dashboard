@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Progetti su misura · Vera Candles</title>
+<meta name="description" content="Edizioni private di candele artigianali per matrimoni, boutique, hotel e regali aziendali: profumo su misura, colore, vaso, incisione e confezione personalizzata. Da 12 pezzi.">
+<meta name="theme-color" content="#FBF8F4">
+<link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Jost:wght@200;300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<header class="shop-head">
+  <div class="wrap">
+    <div class="reveal" style="max-width:740px">
+      <p class="eyebrow">Su misura</p>
+      <h1 style="font-size:clamp(2.6rem,6vw,4.4rem)">Un’edizione che porta<br>il tuo nome</h1>
+      <hr class="rule">
+      <p class="lede">Costruiamo profumo, colore, formato e confezione attorno a un’occasione precisa: un matrimonio, l’apertura di una boutique, il regalo che deve essere ricordato. Minimo dodici pezzi, tempi da quattro a otto settimane.</p>
+      <p style="margin-top:30px"><a class="btn" href="#richiesta">Raccontaci il progetto</a></p>
+    </div>
+  </div>
+</header>
+
+<section class="section" style="padding-top:clamp(46px,6vw,80px)">
+  <div class="wrap split">
+    <div class="split__media reveal">
+      <img src="assets/img/su-misura.svg" alt="Tre candele su misura in formati diversi">
+    </div>
+    <div class="reveal delay-1">
+      <p class="eyebrow">Come funziona</p>
+      <h2>Quattro passaggi,<br>una sola approvazione</h2>
+      <hr class="rule">
+      <ol class="feature-list" style="margin-top:24px">
+        <li><span class="num">01</span><div><h4>Incontro</h4>
+          <p>In atelier o in videochiamata: capiamo occasione, quantità, budget e che cosa deve raccontare il pezzo.</p></div></li>
+        <li><span class="num">02</span><div><h4>Prova olfattiva</h4>
+          <p>Ti mandiamo tre mouillettes con altrettante direzioni. Si sceglie una strada e si affina fino al sì.</p></div></li>
+        <li><span class="num">03</span><div><h4>Campione fisico</h4>
+          <p>Un pezzo finito, con vaso, colore, incisione e confezione definitivi. Da qui non si cambia più nulla.</p></div></li>
+        <li><span class="num">04</span><div><h4>Produzione e consegna</h4>
+          <p>Colata dell’edizione, numerazione, imballo e spedizione assicurata all’indirizzo che indichi.</p></div></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="section section--sand">
+  <div class="wrap">
+    <div class="center reveal" style="max-width:620px;margin-inline:auto;margin-bottom:clamp(34px,5vw,60px)">
+      <p class="eyebrow">Per chi lavoriamo</p>
+      <h2>Occasioni che si ricordano</h2>
+      <hr class="rule rule--center">
+    </div>
+    <div class="pillars">
+      <div class="pillar reveal">
+        <h3>Matrimoni</h3>
+        <p>Bomboniere che non finiscono in un cassetto: profumo scelto insieme, nome degli sposi inciso, confezione coordinata alle partecipazioni. Da 12 pezzi.</p>
+      </div>
+      <div class="pillar reveal delay-1">
+        <h3>Boutique e hotel</h3>
+        <p>La firma olfattiva dello spazio, in formato ambiente e in formato vendita. Include l’etichetta con il tuo marchio. Da 24 pezzi.</p>
+      </div>
+      <div class="pillar reveal delay-2">
+        <h3>Regali importanti</h3>
+        <p>Clienti, collaboratrici, anniversari: un pezzo unico con dedica incisa a mano e biglietto scritto. Anche in copia singola su richiesta.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="richiesta">
+  <div class="wrap split split--wide-left">
+    <div class="reveal">
+      <p class="eyebrow">Richiesta</p>
+      <h2>Parlaci del progetto</h2>
+      <hr class="rule">
+      <p class="lede">Scrivici due righe: rispondiamo entro un giorno lavorativo con una proposta di massima e un preventivo. Nessun impegno finché non approvi il campione.</p>
+      <p class="lede" style="margin-top:22px">Preferisci parlarne a voce? Scrivici su WhatsApp, ti richiamiamo noi.</p>
+    </div>
+
+    <form id="contact-form" class="reveal delay-1" novalidate>
+      <input type="hidden" name="oggetto" value="Progetto su misura">
+      <div class="field-row">
+        <div class="field"><label for="nome">Nome e cognome</label><input id="nome" name="nome" required></div>
+        <div class="field"><label for="email">Email</label><input id="email" type="email" name="email" required></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="telefono">Telefono</label><input id="telefono" name="telefono" inputmode="tel"></div>
+        <div class="field"><label for="quantita">Quantità indicativa</label>
+          <select id="quantita" name="quantita">
+            <option>12 – 24 pezzi</option><option>25 – 50 pezzi</option>
+            <option>51 – 100 pezzi</option><option>Oltre 100 pezzi</option>
+            <option>Pezzo unico</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label for="messaggio">Il progetto</label>
+        <textarea id="messaggio" name="messaggio" placeholder="Occasione, data, atmosfera che hai in mente, budget indicativo…" required></textarea>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px">
+        <button class="btn" type="submit">Invia la richiesta</button>
+        <a class="btn btn--ghost" data-wa target="_blank" rel="noopener">Scrivici su WhatsApp</a>
+      </div>
+      <p class="form-note">Inviando la richiesta si apre il tuo programma di posta con il messaggio già pronto: controlla e premi invio.</p>
+    </form>
+  </div>
+</section>
+
+<script src="assets/js/products.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
