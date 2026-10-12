@@ -247,12 +247,25 @@
     const YD = "https://cloud-api.yandex.net/v1/disk";
     const ydHeaders = t => ({ Authorization:`OAuth ${t}` });
 
+    // Dal 12/10/2026 l'archivio fatture vero è sul Drive dello studio (Yandex ha un data center guasto).
+    // Con la «chiave archivio» salvata qui sotto (= CED_ARCHIVIO_KEY su Render) il CED legge da Drive tramite
+    // focusdata-api, che risponde nello stesso formato di Yandex; senza chiave resta tutto su Yandex come prima.
+    const ARCHIVIO_API = "https://focusdata-api.onrender.com/api/ced/archivio";
+    const chiaveArchivio = () => { try { return localStorage.getItem("ced_archivio_key") || ""; } catch { return ""; } };
+
     async function ydList(token, path="/") {
+      const k = chiaveArchivio();
+      if (k) {
+        const r = await fetchWithTimeout(`${ARCHIVIO_API}/lista?path=${encodeURIComponent(path)}`, 60000, { headers:{ "x-ced-key":k } });
+        if (!r.ok) { const e = await r.json().catch(()=>{}); throw new Error(e?.error || `Archivio Drive: errore ${r.status}`); }
+        return r.json();
+      }
       const r = await fetchWithTimeout(`${YD}/resources?path=${encodeURIComponent(path)}&limit=200&sort=name`, 30000, { headers:ydHeaders(token) });
       if (!r.ok) { const e = await r.json().catch(()=>{}); throw new Error(e?.message || `Errore ${r.status}`); }
       return r.json();
     }
     async function ydDownloadUrl(token, path) {
+      if (chiaveArchivio()) return `${ARCHIVIO_API}/file?path=${encodeURIComponent(path)}`;
       const r = await fetchWithTimeout(`${YD}/resources/download?path=${encodeURIComponent(path)}`, 30000, { headers:ydHeaders(token) });
       if (!r.ok) throw new Error(`Download URL: ${r.status}`);
       return (await r.json()).href;
@@ -264,17 +277,20 @@
       finally { clearTimeout(t); }
     }
     async function fetchPdfBuffer(url) {
-      // Usa proxy dedicato su Render, con retry (il free tier a volte risponde a vuoto)
-      const proxyUrl = "https://ced-proxy.onrender.com/proxy?url=" + encodeURIComponent(url);
+      // Archivio Drive: diretto all'API con la chiave. Yandex: proxy dedicato su Render.
+      // Retry in entrambi i casi (il free tier a volte risponde a vuoto)
+      const daDrive = url.startsWith(ARCHIVIO_API);
+      const proxyUrl = daDrive ? url : "https://ced-proxy.onrender.com/proxy?url=" + encodeURIComponent(url);
       let lastErr = "";
       for (let attempt=1; attempt<=3; attempt++) {
         try {
-          const r = await fetchWithTimeout(proxyUrl, 50000);
+          const r = await fetchWithTimeout(proxyUrl, 50000, daDrive ? { headers:{ "x-ced-key":chiaveArchivio() } } : {});
+          if (daDrive && (r.status===401 || r.status===404 || r.status===400)) { const e = await r.json().catch(()=>{}); throw Object.assign(new Error(e?.error || "HTTP "+r.status), { definitivo:true }); }
           if (!r.ok) { lastErr = "HTTP "+r.status; await new Promise(s=>setTimeout(s,800*attempt)); continue; }
           const buf = await r.arrayBuffer();
           if (buf.byteLength === 0) { lastErr = "vuoto"; await new Promise(s=>setTimeout(s,800*attempt)); continue; }
           return buf;
-        } catch(e) { lastErr = e.message; await new Promise(s=>setTimeout(s,800*attempt)); }
+        } catch(e) { if (e.definitivo) throw new Error("Download PDF fallito ("+e.message+")"); lastErr = e.message; await new Promise(s=>setTimeout(s,800*attempt)); }
       }
       throw new Error("Download PDF fallito ("+lastErr+")");
     }
@@ -387,7 +403,9 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [theme, setTheme] = useState(()=>{ try { return localStorage.getItem("ced_theme")||"light"; } catch { return "light"; } });
       const toggleTheme = ()=>{ const t = theme==="dark"?"light":"dark"; setTheme(t); try{localStorage.setItem("ced_theme",t);}catch{} document.documentElement.setAttribute("data-theme",t); };
 
-      const [ydToken, setYdToken]       = useState(()=>LS.raw("yd_token"));
+      // con la chiave archivio (Drive) il token Yandex non serve più: "drive" sblocca i controlli «c'è un token?»
+      const [ydToken, setYdToken]       = useState(()=>LS.raw("yd_token") || (LS.raw("ced_archivio_key") ? "drive" : ""));
+      const [archKey, setArchKey]       = useState(()=>LS.raw("ced_archivio_key"));
       const [ydSyncPath, setYdSyncPath] = useState(()=>LS.raw("yd_sync_path")||"/Proforma");
       const [ydPath, setYdPath]         = useState("/");
       const [ydItems, setYdItems]       = useState([]);
@@ -1774,6 +1792,14 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       },[ydToken]);
 
       const saveToken=()=>{ LS.setRaw("yd_token",ydToken); LS.setRaw("yd_sync_path",ydSyncPath); ydBrowse("/",ydToken); };
+      // Chiave archivio Drive (12/10/2026): vuota = si torna a leggere da Yandex
+      const saveArchKey=()=>{
+        const k=archKey.trim();
+        if(k) LS.setRaw("ced_archivio_key",k); else localStorage.removeItem("ced_archivio_key");
+        const t = ydToken || (k ? "drive" : "");
+        if(t!==ydToken) setYdToken(t);
+        setYdCrumb(["/"]); ydBrowse("/",t);
+      };
 
       const navTo=(path)=>{
         const parts=path.split("/").filter(Boolean);
@@ -3246,6 +3272,13 @@ In italiano, con numeri ed euro.`,
               <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
                 <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
                   <i className="ti ti-cloud" style={{fontSize:18,color:C.blue}}/><h3 style={{margin:0,fontSize:13,fontWeight:500}}>Connessione Yandex Disk</h3>
+                  <span style={{marginLeft:"auto",fontSize:11,padding:"2px 8px",borderRadius:6,background:LS.raw("ced_archivio_key")?C.tealL:C.redL,color:LS.raw("ced_archivio_key")?C.teal:C.red}}>
+                    Fonte: {LS.raw("ced_archivio_key") ? "archivio Drive dello studio" : "Yandex"}
+                  </span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,marginBottom:8}}>
+                  <input type="password" value={archKey} onChange={e=>setArchKey(e.target.value)} placeholder="Chiave archivio Drive (CED_ARCHIVIO_KEY)…" style={{padding:"6px 9px",borderRadius:7,border:"0.5px solid var(--color-border-secondary)",fontSize:12,fontFamily:"monospace"}}/>
+                  <button onClick={saveArchKey} style={{padding:"6px 14px",background:C.teal,color:"white",border:"none",borderRadius:7,fontSize:12,cursor:"pointer",fontWeight:500}}>Usa Drive</button>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,marginBottom:8}}>
                   <input type="password" value={ydToken} onChange={e=>setYdToken(e.target.value)} placeholder="OAuth token Yandex..." style={{padding:"6px 9px",borderRadius:7,border:"0.5px solid var(--color-border-secondary)",fontSize:12,fontFamily:"monospace"}}/>
