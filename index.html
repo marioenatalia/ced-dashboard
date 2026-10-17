@@ -115,10 +115,20 @@
     // nessuna password: accetta il lasciapassare firmato dal portale e ne
     // verifica la firma con la chiave PUBBLICA del portale.
     const PORTALE = "https://home.focusdataconsulting.com";
+    // Gli incassi sono riservati a queste persone (nome di accesso al portale).
+    // Decisione di Mario, 17/10/2026. La stessa lista sta nel portale (dati.js,
+    // voce "ced", campo soloPer): vanno tenute uguali.
+    const AMMESSI = ["mario", "vera", "virginia"];
 
     function _apri() {
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("root").style.display = "block";
+    }
+    function _riservato() {
+      document.getElementById("login-msg").textContent = "Accesso al CED riservato a Mario, Vera e Virginia.";
+      const b = document.getElementById("login-btn");
+      b.textContent = "Torna al portale";
+      b.onclick = () => { location.href = PORTALE; };
     }
     function _b64u(s) {
       return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
@@ -136,8 +146,10 @@
         if (!ok) return false;
         const dati = JSON.parse(new TextDecoder().decode(_b64u(corpo)));
         if (dati.dash !== "ced" || !dati.scade || dati.scade < Date.now()) return false;
-        sessionStorage.setItem("ced_auth", "1");
         history.replaceState(null, "", location.pathname);   // via il lasciapassare dalla barra
+        const chi = String(dati.utente || "").toLowerCase();  // dentro la firma: non si falsifica
+        if (!AMMESSI.includes(chi)) return "escluso";
+        sessionStorage.setItem("ced_auth", chi);
         return true;
       } catch (e) {
         console.warn("ingresso dal portale non riuscito:", e.message);
@@ -146,8 +158,13 @@
     }
 
     (async () => {
-      if (sessionStorage.getItem("ced_auth") === "1") { _apri(); return; }
-      if (await _entraDalPortale()) { _apri(); return; }
+      // in sessione c'è il nome di chi è entrato: vale solo se è fra gli ammessi
+      // (le sessioni di prima, con "1", tornano al cancello)
+      if (AMMESSI.includes(sessionStorage.getItem("ced_auth"))) { _apri(); return; }
+      sessionStorage.removeItem("ced_auth");
+      const esito = await _entraDalPortale();
+      if (esito === true) { _apri(); return; }
+      if (esito === "escluso") { _riservato(); return; }
       if (new URLSearchParams(location.search).get("t"))
         document.getElementById("login-error").style.display = "block";
     })();
