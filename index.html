@@ -314,8 +314,12 @@
     }
     async function archivioDrive(azione, body) {
       const r = await fetchWithTimeout(`${ARCHIVIO_API}/${azione}`, 60000, { method:"POST", headers:{ "x-ced-key":chiaveArchivio(), "Content-Type":"application/json" }, body:JSON.stringify(body) });
-      if (r.status===404) throw new Error(`L'archivio Drive non supporta ancora «${azione}» (manca l'endpoint su focusdata-api)`);
-      if (!r.ok) { const e = await r.json().catch(()=>{}); throw new Error(e?.error || `Archivio Drive: errore ${r.status}`); }
+      if (!r.ok) {
+        const e = await r.json().catch(()=>null);
+        // 404 senza messaggio JSON = la rotta non c'è (focusdata-api non ancora aggiornato su Render)
+        if (r.status===404 && !e?.error) throw new Error(`L'archivio Drive non supporta ancora «${azione}»: va pubblicato l'aggiornamento di focusdata-api`);
+        throw new Error(e?.error || `Archivio Drive: errore ${r.status}`);
+      }
       return r.json().catch(()=>({}));
     }
     async function ydErrore(r, cosa) {
