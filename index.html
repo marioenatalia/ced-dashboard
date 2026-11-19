@@ -296,6 +296,60 @@
       if (!r.ok) throw new Error(`Download URL: ${r.status}`);
       return (await r.json()).href;
     }
+    // ── Gestione cartelle archivio: crea / elimina / sposta ──
+    // Yandex: API native (DELETE manda nel Cestino di Yandex, recuperabile).
+    // Drive: endpoint di focusdata-api /cartella, /elimina, /sposta (stessa chiave x-ced-key).
+    async function ydAttendiOperazione(token, r) {
+      // Yandex risponde 202 + link all'operazione per cartelle grandi: aspetto che finisca (max ~60s)
+      if (r.status !== 202) return;
+      const op = await r.json().catch(()=>null);
+      if (!op?.href) return;
+      for (let i=0;i<30;i++) {
+        await new Promise(s=>setTimeout(s,2000));
+        const s = await fetchWithTimeout(op.href, 20000, { headers:ydHeaders(token) }).then(x=>x.json()).catch(()=>null);
+        if (s?.status==="success") return;
+        if (s?.status==="failed") throw new Error("Operazione non riuscita su Yandex");
+      }
+      throw new Error("Operazione ancora in corso su Yandex: aggiorna tra qualche minuto");
+    }
+    async function archivioDrive(azione, body) {
+      const r = await fetchWithTimeout(`${ARCHIVIO_API}/${azione}`, 60000, { method:"POST", headers:{ "x-ced-key":chiaveArchivio(), "Content-Type":"application/json" }, body:JSON.stringify(body) });
+      if (!r.ok) {
+        const e = await r.json().catch(()=>null);
+        // 404 senza messaggio JSON = la rotta non c'è (focusdata-api non ancora aggiornato su Render)
+        if (r.status===404 && !e?.error) throw new Error(`L'archivio Drive non supporta ancora «${azione}»: va pubblicato l'aggiornamento di focusdata-api`);
+        throw new Error(e?.error || `Archivio Drive: errore ${r.status}`);
+      }
+      return r.json().catch(()=>({}));
+    }
+    async function ydErrore(r, cosa) {
+      const e = await r.json().catch(()=>{});
+      if (r.status===409) return new Error(`${cosa}: esiste già un elemento con questo nome`);
+      if (r.status===403) return new Error(`${cosa}: permesso negato (il token Yandex deve avere accesso in scrittura)`);
+      return new Error(`${cosa}: ${e?.message || "errore "+r.status}`);
+    }
+    async function ydCreaCartella(token, path) {
+      if (chiaveArchivio()) return archivioDrive("cartella", { path });
+      const r = await fetchWithTimeout(`${YD}/resources?path=${encodeURIComponent(path)}`, 30000, { method:"PUT", headers:ydHeaders(token) });
+      if (!r.ok) throw await ydErrore(r, "Creazione cartella");
+    }
+    async function ydElimina(token, path) {
+      if (chiaveArchivio()) return archivioDrive("elimina", { path });
+      const r = await fetchWithTimeout(`${YD}/resources?path=${encodeURIComponent(path)}&permanently=false`, 30000, { method:"DELETE", headers:ydHeaders(token) });
+      if (!r.ok) throw await ydErrore(r, "Eliminazione");
+      await ydAttendiOperazione(token, r);
+    }
+    async function ydSposta(token, from, to) {
+      if (chiaveArchivio()) return archivioDrive("sposta", { from, to });
+      const r = await fetchWithTimeout(`${YD}/resources/move?from=${encodeURIComponent(from)}&path=${encodeURIComponent(to)}&overwrite=false`, 30000, { method:"POST", headers:ydHeaders(token) });
+      if (!r.ok) throw await ydErrore(r, "Spostamento");
+      await ydAttendiOperazione(token, r);
+    }
+    const ydPathPulito = p => (p||"/").replace(/^disk:/,"") || "/";
+    const ydUnisci = (dir, nome) => (ydPathPulito(dir).replace(/\/+$/,"") + "/" + nome).replace(/\/{2,}/g,"/");
+    const ydGenitore = p => { const s = ydPathPulito(p).replace(/\/+$/,""); const i = s.lastIndexOf("/"); return i<=0 ? "/" : s.slice(0,i); };
+    const ydNomeValido = n => !!n && !/[\/\\]/.test(n) && n!=="." && n!=="..";
+
     async function fetchWithTimeout(url, ms=45000, opts={}) {
       const ctrl = new AbortController();
       const t = setTimeout(()=>ctrl.abort(), ms);
@@ -438,6 +492,13 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [ydLoading, setYdLoading]   = useState(false);
       const [ydError, setYdError]       = useState("");
       const [ydCrumb, setYdCrumb]       = useState(["/"]);
+      // gestione cartelle archivio: vista a griglia (cartelle grandi) o lista, operazioni, dialog sposta
+      const [ydVista, setYdVista]       = useState(()=>{ try{ return localStorage.getItem("ced_yd_vista")||"griglia"; }catch{ return "griglia"; } });
+      const [ydBusy, setYdBusy]         = useState("");
+      const [ydMenu, setYdMenu]         = useState(null);   // path dell'elemento con menu azioni aperto
+      const [ydMove, setYdMove]         = useState(null);   // {item, dest, dirs, loading, nome}
+      const [ydDrag, setYdDrag]         = useState(null);   // path elemento trascinato
+      const [ydDropOn, setYdDropOn]     = useState(null);   // path cartella sotto il cursore
       const [pdfLoading, setPdfLoading] = useState(false);
       const [pdfResult, setPdfResult]   = useState(null);
       const [viewerInv, setViewerInv]   = useState(null);
@@ -1828,9 +1889,63 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       };
 
       const navTo=(path)=>{
+        path=ydPathPulito(path);
         const parts=path.split("/").filter(Boolean);
         setYdCrumb(["/",...parts]);
+        setYdMenu(null);
         ydBrowse(path||"/");
+      };
+
+      // ── Gestione cartelle: crea / elimina / sposta (anche trascinando su una cartella) ──
+      const cambiaVista=v=>{ setYdVista(v); try{ localStorage.setItem("ced_yd_vista",v); }catch{} };
+      const ydEsegui=async(msg, fn)=>{
+        setYdBusy(msg); setYdError(""); setYdMenu(null);
+        try { await fn(); await ydBrowse(ydPath); }
+        catch(e){ setYdError(e.message); }
+        setYdBusy("");
+      };
+      const nuovaCartella=()=>{
+        const nome=(prompt(`Nome della nuova cartella in ${ydPathPulito(ydPath)}:`)||"").trim();
+        if(!nome) return;
+        if(!ydNomeValido(nome)){ alert("Nome non valido: niente / o \\"); return; }
+        if(ydItems.some(it=>it.name.toLowerCase()===nome.toLowerCase())){ alert(`Esiste già "${nome}" in questa cartella.`); return; }
+        ydEsegui(`Creo "${nome}"...`, ()=>ydCreaCartella(ydToken, ydUnisci(ydPath,nome)));
+      };
+      const eliminaElemento=item=>{
+        const tipo=item.type==="dir"?"la cartella":"il file";
+        const extra=item.type==="dir"?"\n\nATTENZIONE: verrà eliminato anche TUTTO il contenuto (sottocartelle e PDF).":"";
+        const dove=chiaveArchivio()?"\n(Finisce nel Cestino del Drive e si può recuperare.)":"\n(Su Yandex finisce nel Cestino e si può recuperare.)";
+        if(!confirm(`Eliminare ${tipo} "${item.name}"?${extra}${dove}`)) return;
+        if(item.type==="dir" && !confirm(`Confermi di nuovo l'eliminazione di "${item.name}" con tutto il contenuto?`)) return;
+        ydEsegui(`Elimino "${item.name}"...`, ()=>ydElimina(ydToken, ydPathPulito(item.path)));
+      };
+      const rinominaElemento=item=>{
+        const nome=(prompt(`Nuovo nome per "${item.name}":`, item.name)||"").trim();
+        if(!nome || nome===item.name) return;
+        if(!ydNomeValido(nome)){ alert("Nome non valido: niente / o \\"); return; }
+        ydEsegui(`Rinomino "${item.name}"...`, ()=>ydSposta(ydToken, ydPathPulito(item.path), ydUnisci(ydGenitore(item.path), nome)));
+      };
+      const spostaIn=async(fromPath, destDir)=>{
+        const from=ydPathPulito(fromPath), dest=ydPathPulito(destDir);
+        const nome=from.split("/").filter(Boolean).pop();
+        if(ydGenitore(from)===dest) return;                       // già lì
+        if(dest===from || dest.startsWith(from.replace(/\/+$/,"")+"/")){ alert("Non puoi spostare una cartella dentro se stessa."); return; }
+        if(!confirm(`Spostare "${nome}" in ${dest}?`)) return;
+        await ydEsegui(`Sposto "${nome}"...`, ()=>ydSposta(ydToken, from, ydUnisci(dest,nome)));
+      };
+      const moveCarica=async(dest)=>{
+        setYdMove(m=>m&&({...m, dest, loading:true, err:""}));
+        try{
+          const data=await ydList(ydToken, dest);
+          const dirs=(data._embedded?.items||[]).filter(it=>it.type==="dir");
+          setYdMove(m=>m&&({...m, dest, dirs, loading:false}));
+        }catch(e){ setYdMove(m=>m&&({...m, loading:false, err:e.message})); }
+      };
+      const apriSposta=item=>{
+        setYdMenu(null);
+        const dest=ydPathPulito(ydPath);
+        setYdMove({item, dest, dirs:[], loading:true, err:""});
+        moveCarica(dest);
       };
 
       const loadPdfForViewer = async(inv)=>{
@@ -3319,41 +3434,147 @@ In italiano, con numeri ed euro.`,
               </div>
 
               {ydToken && <>
-                <div style={{display:"flex",alignItems:"center",gap:3,marginBottom:8,padding:"5px 10px",background:"var(--color-background-secondary)",borderRadius:8,border:"0.5px solid var(--color-border-tertiary)",flexWrap:"wrap"}}>
-                  <i className="ti ti-folder" style={{fontSize:12,color:C.blue}}/>
-                  {ydCrumb.map((b,i)=>(
+                <div style={{display:"flex",alignItems:"center",gap:3,marginBottom:8,padding:"7px 10px",background:"var(--color-background-secondary)",borderRadius:8,border:"0.5px solid var(--color-border-tertiary)",flexWrap:"wrap"}}>
+                  <i className="ti ti-folder" style={{fontSize:14,color:C.blue}}/>
+                  {ydCrumb.map((b,i)=>{
+                    const p="/"+ydCrumb.slice(1,i+1).join("/");
+                    return (
                     <span key={i} style={{display:"flex",alignItems:"center",gap:2}}>
-                      {i>0 && <span style={{color:"var(--color-text-secondary)",fontSize:11}}>›</span>}
-                      <button onClick={()=>{ const p="/"+ydCrumb.slice(1,i+1).join("/"); navTo(p||"/"); }} style={{background:"none",border:"none",color:i===ydCrumb.length-1?C.blue:"var(--color-text-secondary)",fontSize:11,cursor:"pointer",padding:"0 2px",fontWeight:i===ydCrumb.length-1?500:400}}>{b}</button>
-                    </span>
-                  ))}
-                  <button onClick={()=>ydBrowse(ydPath,ydToken)} style={{marginLeft:"auto",background:"none",border:"none",color:C.blue,cursor:"pointer",fontSize:13}}><i className={`ti ti-refresh ${ydLoading?"ti-spin":""}`}/></button>
+                      {i>0 && <span style={{color:"var(--color-text-secondary)",fontSize:12}}>›</span>}
+                      <button onClick={()=>navTo(p||"/")}
+                        onDragOver={e=>{ if(ydDrag){ e.preventDefault(); setYdDropOn("crumb:"+p); } }}
+                        onDragLeave={()=>setYdDropOn(null)}
+                        onDrop={e=>{ e.preventDefault(); const f=ydDrag; setYdDrag(null); setYdDropOn(null); if(f) spostaIn(f, p||"/"); }}
+                        title={ydDrag?`Rilascia per spostare in ${p||"/"}`:undefined}
+                        style={{background:ydDropOn==="crumb:"+p?C.blueL:"none",border:"none",borderRadius:5,color:i===ydCrumb.length-1?C.blue:"var(--color-text-secondary)",fontSize:12,cursor:"pointer",padding:"1px 4px",fontWeight:i===ydCrumb.length-1?600:400}}>{b}</button>
+                    </span>);
+                  })}
+                  <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+                    <button onClick={nuovaCartella} disabled={!!ydBusy} title="Crea una nuova cartella qui" style={{padding:"4px 10px",background:C.blue,color:"white",border:"none",borderRadius:7,fontSize:11,cursor:ydBusy?"wait":"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:4}}><i className="ti ti-folder-plus"/>Nuova cartella</button>
+                    <div style={{display:"flex",border:"0.5px solid var(--color-border-secondary)",borderRadius:7,overflow:"hidden"}}>
+                      {[["griglia","ti-layout-grid","Cartelle grandi"],["lista","ti-list","Lista"]].map(([v,ic,t])=>(
+                        <button key={v} onClick={()=>cambiaVista(v)} title={t} style={{padding:"4px 8px",background:ydVista===v?C.blueL:"transparent",color:ydVista===v?C.blue:"var(--color-text-secondary)",border:"none",cursor:"pointer",fontSize:13}}><i className={`ti ${ic}`}/></button>
+                      ))}
+                    </div>
+                    <button onClick={()=>ydBrowse(ydPath,ydToken)} title="Aggiorna" style={{background:"none",border:"none",color:C.blue,cursor:"pointer",fontSize:14}}><i className={`ti ti-refresh ${ydLoading?"ti-spin":""}`}/></button>
+                  </div>
                 </div>
+                {ydBusy && <p style={{margin:"0 0 8px",fontSize:11,color:C.blue,background:C.blueL,padding:"5px 9px",borderRadius:6}}><i className="ti ti-loader-2 ti-spin" style={{marginRight:5}}/>{ydBusy}</p>}
+                {!ydLoading && ydItems.length>0 && <p style={{margin:"0 0 6px",fontSize:10,color:"var(--color-text-secondary)"}}>Suggerimento: trascina una cartella o un PDF sopra un'altra cartella (o sul percorso in alto) per spostarlo. Usa <i className="ti ti-dots-vertical"/> per rinominare, spostare o eliminare.</p>}
 
-                <div style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,overflow:"hidden",marginBottom:12}}>
-                  {ydLoading && <div style={{padding:18,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)"}}><i className="ti ti-loader-2" style={{marginRight:5}}/>Caricamento...</div>}
-                  {!ydLoading && ydItems.length===0 && <div style={{padding:18,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)"}}>Nessun PDF trovato. <button onClick={()=>ydBrowse("/",ydToken)} style={{color:C.blue,background:"none",border:"none",cursor:"pointer",fontSize:12}}>Vai alla radice</button></div>}
-                  {!ydLoading && ydItems.map((item,i)=>(
-                    <div key={i} style={{display:"flex",alignItems:"center",padding:"9px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",gap:9,cursor:item.type==="dir"?"pointer":"default"}}
-                      onClick={item.type==="dir"?()=>{navTo(item.path); setYdCrumb(p=>[...p,item.name]);}:undefined}>
-                      <div style={{width:30,height:30,borderRadius:7,background:item.type==="dir"?C.blueL:C.purpleL,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                        <i className={`ti ${item.type==="dir"?"ti-folder":"ti-file-type-pdf"}`} style={{fontSize:14,color:item.type==="dir"?C.blue:C.purple}}/>
-                      </div>
-                      <div style={{flex:1,minWidth:0}}>
-                        <p style={{margin:0,fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</p>
-                        {item.type==="file" && <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{item.size?(Math.round(item.size/1024)+"KB"):"—"} · {item.modified?fmtD(item.modified.split("T")[0]):"—"}</p>}
-                      </div>
-                      {item.type==="file" && (
-                        <div style={{display:"flex",gap:5}}>
-                          <button onClick={e=>{e.stopPropagation();parsePdf(item);}} disabled={pdfLoading} style={{padding:"5px 10px",background:pdfLoading?C.grayL:C.purpleL,color:pdfLoading?C.gray:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:pdfLoading?"wait":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4}}>
-                            {pdfLoading?<><i className="ti ti-loader-2" style={{fontSize:11}}/>Leggo...</>:<><i className="ti ti-scan" style={{fontSize:11}}/>Leggi AI</>}
-                          </button>
+                {(()=>{
+                  const griglia=ydVista==="griglia";
+                  const azioni=item=>(
+                    <div style={{position:"relative"}} onClick={e=>e.stopPropagation()}>
+                      <button onClick={()=>setYdMenu(m=>m===item.path?null:item.path)} title="Azioni" style={{background:ydMenu===item.path?"var(--color-background-secondary)":"none",border:"none",borderRadius:6,cursor:"pointer",padding:"3px 5px",color:"var(--color-text-secondary)",fontSize:15}}><i className="ti ti-dots-vertical"/></button>
+                      {ydMenu===item.path && (
+                        <div style={{position:"absolute",right:0,top:"100%",zIndex:50,background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-secondary)",borderRadius:9,boxShadow:"0 8px 24px rgba(0,0,0,.18)",padding:4,minWidth:150}}>
+                          {[["ti-pencil","Rinomina",()=>rinominaElemento(item),"var(--color-text-primary)"],
+                            ["ti-folder-symlink","Sposta in…",()=>apriSposta(item),"var(--color-text-primary)"],
+                            ["ti-trash","Elimina",()=>eliminaElemento(item),C.red]].map(([ic,l,fn,col])=>(
+                            <button key={l} onClick={fn} disabled={!!ydBusy} style={{display:"flex",alignItems:"center",gap:7,width:"100%",textAlign:"left",padding:"7px 10px",background:"none",border:"none",borderRadius:6,cursor:"pointer",fontSize:12,color:col}}><i className={`ti ${ic}`}/>{l}</button>
+                          ))}
                         </div>
                       )}
+                    </div>
+                  );
+                  const dragProps=item=>({
+                    draggable:!ydBusy,
+                    onDragStart:e=>{ setYdDrag(item.path); setYdMenu(null); try{ e.dataTransfer.effectAllowed="move"; e.dataTransfer.setData("text/plain",item.path); }catch{} },
+                    onDragEnd:()=>{ setYdDrag(null); setYdDropOn(null); },
+                    ...(item.type==="dir" ? {
+                      onDragOver:e=>{ if(ydDrag && ydDrag!==item.path){ e.preventDefault(); if(ydDropOn!==item.path) setYdDropOn(item.path); } },
+                      onDragLeave:()=>setYdDropOn(d=>d===item.path?null:d),
+                      onDrop:e=>{ e.preventDefault(); const f=ydDrag; setYdDrag(null); setYdDropOn(null); if(f && f!==item.path) spostaIn(f, item.path); },
+                    } : {}),
+                  });
+                  const apri=item=>{ if(item.type==="dir") navTo(item.path); };
+                  const leggiBtn=item=>(
+                    <button onClick={e=>{e.stopPropagation();parsePdf(item);}} disabled={pdfLoading} style={{padding:"5px 10px",background:pdfLoading?C.grayL:C.purpleL,color:pdfLoading?C.gray:C.purple,border:`1px solid ${C.purple}33`,borderRadius:7,fontSize:11,cursor:pdfLoading?"wait":"pointer",fontWeight:500,display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
+                      {pdfLoading?<><i className="ti ti-loader-2" style={{fontSize:11}}/>Leggo...</>:<><i className="ti ti-scan" style={{fontSize:11}}/>Leggi AI</>}
+                    </button>
+                  );
+                  const evid=item=>ydDropOn===item.path;
+                  return (
+                <div onClick={()=>setYdMenu(null)} style={{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,marginBottom:12,padding:griglia?12:0,minHeight:ydMenu?190:undefined}}>
+                  {ydLoading && <div style={{padding:18,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)"}}><i className="ti ti-loader-2" style={{marginRight:5}}/>Caricamento...</div>}
+                  {!ydLoading && ydItems.length===0 && <div style={{padding:18,textAlign:"center",fontSize:12,color:"var(--color-text-secondary)"}}>Cartella vuota. <button onClick={nuovaCartella} style={{color:C.blue,background:"none",border:"none",cursor:"pointer",fontSize:12}}>Crea una cartella</button> · <button onClick={()=>navTo("/")} style={{color:C.blue,background:"none",border:"none",cursor:"pointer",fontSize:12}}>Vai alla radice</button></div>}
+                  {!ydLoading && griglia && ydItems.length>0 && (
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
+                      {ydItems.map(item=>{
+                        const dir=item.type==="dir";
+                        return (
+                        <div key={item.path} {...dragProps(item)} onClick={()=>apri(item)} title={item.name}
+                          style={{position:"relative",display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"16px 10px 12px",borderRadius:12,cursor:dir?"pointer":"default",
+                            background:evid(item)?C.blueL:"var(--color-background-secondary)",
+                            border:evid(item)?`2px dashed ${C.blue}`:"1px solid var(--color-border-tertiary)",
+                            opacity:ydDrag===item.path?.45:1,transition:"background .12s"}}>
+                          <div style={{position:"absolute",top:4,right:4}}>{azioni(item)}</div>
+                          <i className={`ti ${dir?(evid(item)?"ti-folder-open":"ti-folder-filled"):"ti-file-type-pdf"}`} style={{fontSize:56,lineHeight:1,color:dir?C.blue:C.purple}}/>
+                          <p style={{margin:0,fontSize:13,fontWeight:600,textAlign:"center",width:"100%",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",wordBreak:"break-word",minHeight:34}}>{item.name}</p>
+                          {!dir && <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{item.size?(Math.round(item.size/1024)+"KB"):"—"} · {item.modified?fmtD(item.modified.split("T")[0]):"—"}</p>}
+                          {!dir && leggiBtn(item)}
+                        </div>);
+                      })}
+                    </div>
+                  )}
+                  {!ydLoading && !griglia && ydItems.map(item=>(
+                    <div key={item.path} {...dragProps(item)} style={{display:"flex",alignItems:"center",padding:"11px 12px",borderBottom:"0.5px solid var(--color-border-tertiary)",gap:10,cursor:item.type==="dir"?"pointer":"default",background:evid(item)?C.blueL:undefined,outline:evid(item)?`2px dashed ${C.blue}`:undefined,opacity:ydDrag===item.path?.45:1}}
+                      onClick={()=>apri(item)}>
+                      <div style={{width:38,height:38,borderRadius:8,background:item.type==="dir"?C.blueL:C.purpleL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                        <i className={`ti ${item.type==="dir"?"ti-folder":"ti-file-type-pdf"}`} style={{fontSize:20,color:item.type==="dir"?C.blue:C.purple}}/>
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{margin:0,fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</p>
+                        {item.type==="file" && <p style={{margin:0,fontSize:10,color:"var(--color-text-secondary)"}}>{item.size?(Math.round(item.size/1024)+"KB"):"—"} · {item.modified?fmtD(item.modified.split("T")[0]):"—"}</p>}
+                      </div>
+                      {item.type==="file" && leggiBtn(item)}
+                      {azioni(item)}
                       {item.type==="dir" && <i className="ti ti-chevron-right" style={{fontSize:13,color:"var(--color-text-secondary)"}}/>}
                     </div>
                   ))}
-                </div>
+                </div>);
+                })()}
+
+                {ydMove && (
+                  <div onClick={()=>setYdMove(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.45)",zIndex:210,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"60px 16px",overflowY:"auto"}}>
+                    <div onClick={e=>e.stopPropagation()} style={{background:"var(--color-surface, var(--color-background-primary))",border:`1px solid ${C.blue}44`,borderRadius:14,padding:"14px 16px",boxShadow:"0 12px 40px rgba(0,0,0,.25)",width:"100%",maxWidth:520}}>
+                      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}>
+                        <i className="ti ti-folder-symlink" style={{fontSize:18,color:C.blue}}/>
+                        <h3 style={{margin:0,fontSize:14,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Sposta "{ydMove.item.name}"</h3>
+                        <button onClick={()=>setYdMove(null)} style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:16}}><i className="ti ti-x"/></button>
+                      </div>
+                      <p style={{margin:"0 0 8px",fontSize:11,color:"var(--color-text-secondary)"}}>Scegli la cartella di destinazione, poi premi «Sposta qui».</p>
+                      <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 9px",background:"var(--color-background-secondary)",borderRadius:8,marginBottom:8,fontSize:12}}>
+                        <button onClick={()=>moveCarica(ydGenitore(ydMove.dest))} disabled={ydMove.dest==="/"} title="Cartella superiore" style={{background:"none",border:"none",cursor:ydMove.dest==="/"?"default":"pointer",color:ydMove.dest==="/"?"var(--color-text-secondary)":C.blue,fontSize:14}}><i className="ti ti-arrow-up"/></button>
+                        <i className="ti ti-folder" style={{color:C.blue}}/>
+                        <span style={{fontFamily:"monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ydMove.dest}</span>
+                      </div>
+                      <div style={{maxHeight:300,overflowY:"auto",border:"0.5px solid var(--color-border-tertiary)",borderRadius:8,marginBottom:10}}>
+                        {ydMove.loading && <p style={{margin:0,padding:12,fontSize:12,color:"var(--color-text-secondary)"}}><i className="ti ti-loader-2 ti-spin" style={{marginRight:5}}/>Carico le cartelle...</p>}
+                        {ydMove.err && <p style={{margin:0,padding:12,fontSize:12,color:C.red}}>{ydMove.err}</p>}
+                        {!ydMove.loading && !ydMove.err && ydMove.dirs.length===0 && <p style={{margin:0,padding:12,fontSize:12,color:"var(--color-text-secondary)"}}>Nessuna sottocartella.</p>}
+                        {!ydMove.loading && ydMove.dirs.map(d=>{
+                          const se=ydPathPulito(d.path)===ydPathPulito(ydMove.item.path);
+                          return (
+                          <div key={d.path} onClick={()=>{ if(!se) moveCarica(ydPathPulito(d.path)); }} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 11px",borderBottom:"0.5px solid var(--color-border-tertiary)",cursor:se?"not-allowed":"pointer",opacity:se?.4:1,fontSize:13}}>
+                            <i className="ti ti-folder-filled" style={{fontSize:18,color:C.blue}}/>
+                            <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</span>
+                            {!se && <i className="ti ti-chevron-right" style={{fontSize:13,color:"var(--color-text-secondary)"}}/>}
+                          </div>);
+                        })}
+                      </div>
+                      <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
+                        <button onClick={()=>setYdMove(null)} style={{padding:"7px 14px",background:"transparent",border:"0.5px solid var(--color-border-secondary)",borderRadius:8,fontSize:12,cursor:"pointer",color:"var(--color-text-secondary)"}}>Annulla</button>
+                        <button disabled={ydMove.loading || ydGenitore(ydMove.item.path)===ydMove.dest}
+                          onClick={()=>{ const m=ydMove; setYdMove(null); spostaIn(m.item.path, m.dest); }}
+                          style={{padding:"7px 16px",background:(ydMove.loading||ydGenitore(ydMove.item.path)===ydMove.dest)?C.grayL:C.blue,color:(ydMove.loading||ydGenitore(ydMove.item.path)===ydMove.dest)?C.gray:"white",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+                          <i className="ti ti-check"/>Sposta qui
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {pdfResult && (
                   <div style={{background:"var(--color-background-primary)",border:`1px solid ${C.purple}44`,borderRadius:12,padding:"14px 16px"}}>
