@@ -115,6 +115,7 @@
     // nessuna password: accetta il lasciapassare firmato dal portale e ne
     // verifica la firma con la chiave PUBBLICA del portale.
     const PORTALE = "https://home.focusdataconsulting.com";
+    const CED_API = "https://focusdata-api.onrender.com/api/ced";
     // Gli incassi sono riservati a queste persone (nome di accesso al portale).
     // Decisione di Mario, 17/10/2026. La stessa lista sta nel portale (dati.js,
     // voce "ced", campo soloPer): vanno tenute uguali.
@@ -123,6 +124,9 @@
     function _apri() {
       document.getElementById("login-screen").style.display = "none";
       document.getElementById("root").style.display = "block";
+      // l'app parte solo dopo l'ingresso, così trova già l'accesso al database (19/11/2026)
+      window._cedAperto = true;
+      if (window._avviaCed) window._avviaCed();
     }
     function _riservato() {
       document.getElementById("login-msg").textContent = "Accesso al CED riservato a Mario, Vera e Virginia.";
@@ -149,6 +153,13 @@
         history.replaceState(null, "", location.pathname);   // via il lasciapassare dalla barra
         const chi = String(dati.utente || "").toLowerCase();  // dentro la firma: non si falsifica
         if (!AMMESSI.includes(chi)) return "escluso";
+        // il database si raggiunge solo dall'API (19/11/2026): il lasciapassare
+        // si consegna all'API, che lo verifica di nuovo e dà un accesso di 12 ore
+        const rs = await fetch(CED_API + "/sessione", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lasciapassare: t }) });
+        const js = await rs.json().catch(() => ({}));
+        if (!rs.ok || !js.token) { console.warn("accesso CED rifiutato:", js.error || rs.status); return rs.status === 403 ? "escluso" : false; }
+        sessionStorage.setItem("ced_token", js.token);
         sessionStorage.setItem("ced_auth", chi);
         return true;
       } catch (e) {
@@ -160,8 +171,8 @@
     (async () => {
       // in sessione c'è il nome di chi è entrato: vale solo se è fra gli ammessi
       // (le sessioni di prima, con "1", tornano al cancello)
-      if (AMMESSI.includes(sessionStorage.getItem("ced_auth"))) { _apri(); return; }
-      sessionStorage.removeItem("ced_auth");
+      if (AMMESSI.includes(sessionStorage.getItem("ced_auth")) && sessionStorage.getItem("ced_token")) { _apri(); return; }
+      sessionStorage.removeItem("ced_auth"); sessionStorage.removeItem("ced_token");
       const esito = await _entraDalPortale();
       if (esito === true) { _apri(); return; }
       if (esito === "escluso") { _riservato(); return; }
@@ -202,20 +213,18 @@
     const todayStr = () => new Date().toISOString().split("T")[0];
 
     // ── Supabase (REST) — URL + publishable key salvati in localStorage ──
-    // Coordinate predefinite del Foglio: così lo staff che entra dal portale vede i dati
-    // senza dover incollare nulla (prima ogni browser andava configurato a mano e chi non
-    // lo faceva trovava la dashboard vuota). Un valore incollato nel tab Foglio ha comunque
-    // la precedenza. La chiave è la publishable già presente nel repo (keepalive.yml):
-    // la protezione dei dati non dipende da lei ma dalle regole RLS sul database.
-    const DEFAULT_SB = { url:"https://zncwwxuthnghguhmmkky.supabase.co", key:"sb_publishable_mpzK4j0qTB8P-XBK-vncKg_WzU6UhLX" };
-    const sbCfg = () => ({ url:((localStorage.getItem("ced_sb_url")||DEFAULT_SB.url)).replace(/\/+$/,""), key:localStorage.getItem("ced_sb_key")||DEFAULT_SB.key });
-    const sbReady = () => { const c=sbCfg(); return !!(c.url && c.key); };
+    // Dal 19/11/2026 il browser non parla più con Supabase: ogni lettura e scrittura
+    // passa da focusdata-api (/api/ced/db/<tabella>) con l'accesso di 12 ore ottenuto
+    // entrando dal portale. La chiave del database sta solo su Render.
+    const CED_DB = "https://focusdata-api.onrender.com/api/ced/db/";
+    const sbReady = () => !!sessionStorage.getItem("ced_token");
     async function sbReq(method, pathQ, body) {
-      const c = sbCfg(); if(!c.url||!c.key) throw new Error("Supabase non configurato");
-      const h = { "apikey":c.key, "Authorization":"Bearer "+c.key, "Content-Type":"application/json" };
-      if (method!=="GET") h["Prefer"]="return=representation";
-      const r = await fetch(c.url+"/rest/v1/"+pathQ, { method, headers:h, body: body?JSON.stringify(body):undefined });
-      if (!r.ok) throw new Error("Supabase "+r.status+": "+(await r.text()).slice(0,200));
+      const tok = sessionStorage.getItem("ced_token");
+      if (!tok) throw new Error("Sessione del CED scaduta: rientra dal portale");
+      const h = { "Authorization":"Bearer "+tok, "Content-Type":"application/json" };
+      const r = await fetch(CED_DB+pathQ, { method, headers:h, body: body?JSON.stringify(body):undefined });
+      if (r.status===401) { sessionStorage.removeItem("ced_token"); sessionStorage.removeItem("ced_auth"); setTimeout(()=>location.reload(), 1500); throw new Error("Sessione del CED scaduta: rientra dal portale (home.focusdataconsulting.com)"); }
+      if (!r.ok) throw new Error("Database CED "+r.status+": "+(await r.text()).slice(0,200));
       const t = await r.text(); return t?JSON.parse(t):null;
     }
     const sbGet    = (table,q="") => sbReq("GET", table+"?"+q);
@@ -3829,6 +3838,8 @@ In italiano, con numeri ed euro.`,
     // Trasforma ed esegue lo script JSX forzando il runtime CLASSICO (React.createElement),
     // evitando l'import automatico di "react/jsx-runtime" non risolvibile nel browser.
     (function () {
+      var avvia = function () {
+      if (window._cedAvviato) return; window._cedAvviato = true;
       try {
         var code = document.getElementById("app-code").textContent;
         var out = Babel.transform(code, { presets: [["react", { runtime: "classic" }]] }).code;
@@ -3838,6 +3849,8 @@ In italiano, con numeri ed euro.`,
           '<div style="padding:20px;font-family:sans-serif;color:#a32d2d">Errore di avvio: ' + (e && e.message) + '</div>';
         console.error(e);
       }
+      };
+      if (window._cedAperto) avvia(); else window._avviaCed = avvia;
     })();
   </script>
 </body>
