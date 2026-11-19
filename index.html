@@ -1914,7 +1914,7 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
       const eliminaElemento=item=>{
         const tipo=item.type==="dir"?"la cartella":"il file";
         const extra=item.type==="dir"?"\n\nATTENZIONE: verrà eliminato anche TUTTO il contenuto (sottocartelle e PDF).":"";
-        const dove=chiaveArchivio()?"":"\n(Su Yandex finisce nel Cestino e si può recuperare.)";
+        const dove=chiaveArchivio()?"\n(Finisce nel Cestino del Drive e si può recuperare.)":"\n(Su Yandex finisce nel Cestino e si può recuperare.)";
         if(!confirm(`Eliminare ${tipo} "${item.name}"?${extra}${dove}`)) return;
         if(item.type==="dir" && !confirm(`Confermi di nuovo l'eliminazione di "${item.name}" con tutto il contenuto?`)) return;
         ydEsegui(`Elimino "${item.name}"...`, ()=>ydElimina(ydToken, ydPathPulito(item.path)));
