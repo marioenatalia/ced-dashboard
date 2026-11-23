@@ -557,6 +557,10 @@ Rispondi SOLO con JSON valido, nessun testo fuori dal JSON:
       const [foglioSeed, setFoglioSeed] = useState("idle");
       const [foglioAlign, setFoglioAlign] = useState("idle");
       const [foglioMsg, setFoglioMsg]   = useState("");
+      // Ponte Staff → CED: resoconto della prova a vuoto / dell'applicazione, e scelte sui clienti incerti
+      const [ponte, setPonte]           = useState(null);
+      const [ponteBusy, setPonteBusy]   = useState(false);
+      const [ponteScelte, setPonteScelte] = useState({});
 
       const _today = new Date(); _today.setHours(0,0,0,0);
       const daysOverdue = overdueDays;
@@ -1370,6 +1374,31 @@ REGOLE: importo_gia_pagato = somma degli acconti/pagamenti parziali indicati (0 
         }catch(e){ setFoglioMsg("Errore caricamento: "+e.message); }
         setFoglioLoad(false);
       },[]);
+
+      // Porta nel CED clienti e proforme emesse dalla Parcellazione dello Staff (focusdata-api ced_ponte.js).
+      // Prima sempre la prova a vuoto: si vede cosa entrerà; solo «Applica» scrive.
+      const allineaStaff = async(applica)=>{
+        const tok=sessionStorage.getItem("ced_token");
+        if(!tok){ setFoglioMsg("Errore: sessione del CED scaduta, rientra dal portale"); return; }
+        if(applica && ponte){
+          const c=ponte.conteggi||{};
+          if(!confirm(`Portare nel CED dallo Staff:\n• ${c.clienti_nuovi} clienti nuovi\n• ${c.inserite} proforme (${fmt(c.inserite_aperte)} ancora da incassare)\n• ${c.collegate} collegamenti a righe già presenti\n\nNon cancella nulla e non cambia importi o stato «pagato» delle righe esistenti.`)) return;
+        }
+        setPonteBusy(true);
+        try{
+          const r=await fetch("https://focusdata-api.onrender.com/api/ced/allinea-staff",{method:"POST",headers:{"Authorization":"Bearer "+tok,"Content-Type":"application/json"},body:JSON.stringify({applica:!!applica,scelte:ponteScelte})});
+          if(r.status===401){ sessionStorage.removeItem("ced_token"); sessionStorage.removeItem("ced_auth"); setTimeout(()=>location.reload(),1500); throw new Error("sessione del CED scaduta: rientra dal portale"); }
+          const js=await r.json().catch(()=>({}));
+          if(!r.ok) throw new Error(js.error||("errore "+r.status));
+          setPonte({...js, _scelte: JSON.stringify(ponteScelte)});   // con quali scelte è stato calcolato
+          if(applica){
+            await loadFoglio();
+            const e=js.esito||{};
+            setFoglioMsg(`Allineato dallo Staff: ${e.clienti_creati} clienti nuovi, ${e.inserite} proforme inserite, ${e.collegate} collegate, ${e.partite_iva} partite IVA completate${e.errori?.length?` · Errore su ${e.errori.length} righe: vedi il riquadro`:""}.`);
+          }
+        }catch(err){ setFoglioMsg("Errore allineamento dallo Staff: "+err.message); }
+        setPonteBusy(false);
+      };
 
       // Carica automaticamente i dati del Foglio quando si apre la scheda (se connesso e vuoto)
       useEffect(()=>{
@@ -2685,6 +2714,7 @@ In italiano, con numeri ed euro.`,
                     <i className={`ti ${foglioAlign==="running"?"ti-loader-2 ti-spin":"ti-user-plus"}`}/>{foglioAlign==="running"?"Allineo...":"Allinea nuovi da Excel"}
                     <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) allineaNuovi(f); e.target.value="";}}/>
                   </label>
+                  <button onClick={()=>allineaStaff(false)} disabled={ponteBusy} title="Porta nel CED i clienti e le proforme emesse dalla Parcellazione dello Staff: prima mostra cosa entrerà, poi scrive solo con «Applica»" style={{padding:"8px 14px",background:C.purpleL,color:C.purple,border:`1px solid ${C.purple}44`,borderRadius:8,fontSize:12,fontWeight:600,cursor:ponteBusy?"wait":"pointer",display:"flex",alignItems:"center",gap:5}}><i className={`ti ${ponteBusy?"ti-loader-2 ti-spin":"ti-arrows-exchange"}`}/>{ponteBusy?"Controllo lo Staff...":"Allinea dallo Staff"}</button>
                   <label style={{padding:"8px 14px",background:"transparent",border:`1px solid ${S.slateD}55`,color:S.slateD,borderRadius:8,fontSize:12,fontWeight:500,cursor:foglioSeed==="running"?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:5}} title="ATTENZIONE: sostituisce TUTTI i dati del Foglio con l'Excel (usare solo per ripartire da zero)">
                     <i className={`ti ${foglioSeed==="running"?"ti-loader-2 ti-spin":"ti-database-import"}`}/>{foglioSeed==="running"?"Importo...":"Reimporta tutto"}
                     <input type="file" accept=".xls,.xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0]; if(f) seedFoglio(f); e.target.value="";}}/>
@@ -2693,6 +2723,56 @@ In italiano, con numeri ed euro.`,
                 </div>
               )}
               {foglioMsg && <p style={{margin:"0 0 10px",fontSize:11,color:foglioMsg.startsWith("Errore")?C.red:S.good,background:(foglioMsg.startsWith("Errore")?C.redL:S.good+"15"),padding:"7px 10px",borderRadius:7}}>{foglioMsg}</p>}
+
+              {/* ── Resoconto del ponte Staff → CED ── */}
+              {ponte && (()=>{
+                const c=ponte.conteggi||{}, e=ponte.esito;
+                const daFare=(c.inserite||0)+(c.collegate||0)+(c.clienti_nuovi||0);
+                const sceltePendenti=Object.values(ponteScelte).filter(Boolean).length;
+                const scelteCambiate=ponte._scelte!==JSON.stringify(ponteScelte);
+                const sez=(titolo,n,cont,aperto)=> n>0 && (
+                  <details open={aperto} style={{borderTop:"0.5px solid var(--color-border-tertiary)",padding:"6px 0"}}>
+                    <summary style={{cursor:"pointer",fontSize:12,fontWeight:600}}>{titolo} ({n})</summary>
+                    <div style={{maxHeight:260,overflowY:"auto",padding:"4px 0 0 14px"}}>{cont}</div>
+                  </details>);
+                const riga=(x,extra)=>(<div key={x.numero+(x.periodo||"")} style={{display:"flex",gap:8,fontSize:11,padding:"2px 0",flexWrap:"wrap"}}>
+                  <b style={{minWidth:52}}>{x.numero}</b><span style={{flex:"1 1 200px"}}>{x.cliente}</span>
+                  <span style={{minWidth:70,textAlign:"right",fontWeight:600}}>{fmt(x.totale)}</span>{extra}</div>);
+                return (
+                <div style={{background:"var(--color-surface)",border:`1px solid ${C.purple}44`,borderRadius:12,padding:"12px 14px",boxShadow:"var(--shadow-card)",marginBottom:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                    <b style={{fontSize:13,color:C.purple}}>⇄ Allineamento dallo Staff</b>
+                    <span style={{fontSize:10,padding:"2px 8px",borderRadius:6,background:ponte.prova?S.warn+"18":S.good+"18",color:ponte.prova?S.warnD:S.good,fontWeight:600}}>{ponte.prova?"prova a vuoto: non è stato scritto niente":"applicato"}</span>
+                    <button onClick={()=>setPonte(null)} title="Chiudi" style={{marginLeft:"auto",background:"none",border:"none",cursor:"pointer",color:"var(--color-text-secondary)",fontSize:14}}>✕</button>
+                  </div>
+                  <p style={{margin:"0 0 8px",fontSize:11,color:"var(--color-text-secondary)"}}>Proforme emesse dalla Parcellazione dello Staff ({c.proforme_staff}). Lo storico TeamSystem (1–368/00) non si porta: il CED lo ha già. Le righe già presenti nel CED non perdono mai importo né stato «pagato».</p>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(118px,1fr))",gap:6,marginBottom:8}}>
+                    {[["Clienti nuovi",c.clienti_nuovi],["Proforme da inserire",c.inserite],["…di cui da incassare",fmt(c.inserite_aperte)],["Collegate a righe esistenti",c.collegate],["Già nel CED",c.gia_presenti],["Clienti da scegliere",c.clienti_da_scegliere],["Da decidere a mano",c.da_decidere]].map(([l,v])=>(
+                      <div key={l} style={{border:"0.5px solid var(--color-border-tertiary)",borderRadius:9,padding:"6px 8px"}}><p style={{margin:0,fontSize:9,color:"var(--color-text-secondary)",fontWeight:600}}>{l.toUpperCase()}</p><p style={{margin:0,fontSize:15,fontWeight:700}}>{v}</p></div>))}
+                  </div>
+                  {e && <p style={{margin:"0 0 8px",fontSize:11,padding:"6px 10px",borderRadius:7,background:e.errori?.length?C.redL:S.good+"15",color:e.errori?.length?C.red:S.good}}>Fatto: {e.clienti_creati} clienti creati, {e.inserite} proforme inserite, {e.collegate} collegate, {e.partite_iva} partite IVA completate.{e.errori?.length?` Errori: ${e.errori.join(" · ")}`:""}</p>}
+                  {sez("Clienti da scegliere — decidi tu se sono già nel CED", (ponte.clienti_da_scegliere||[]).length, (ponte.clienti_da_scegliere||[]).map(g=>(
+                    <div key={g.chiave} style={{display:"flex",gap:8,alignItems:"center",fontSize:11,padding:"3px 0",flexWrap:"wrap"}}>
+                      <span style={{flex:"1 1 220px"}}><b>{g.cliente}</b>{g.partita_iva?` · ${g.partita_iva}`:""} · {g.proforme.map(p=>p.numero).join(", ")} · {fmt(g.totale)}</span>
+                      <select value={ponteScelte[g.chiave]||""} onChange={ev=>setPonteScelte(s=>({...s,[g.chiave]:ev.target.value}))} style={{padding:"3px 6px",borderRadius:6,border:`1px solid ${ponteScelte[g.chiave]?C.purple:"var(--color-border-secondary)"}`,background:"var(--color-surface)",color:"var(--color-text-primary)",fontSize:11,maxWidth:320}}>
+                        <option value="">— non portare per ora —</option>
+                        {g.candidati.map(k=><option key={k.id} value={k.id}>è già nel CED come: {k.nome}</option>)}
+                        <option value="nuovo">➕ è un cliente nuovo</option>
+                      </select>
+                    </div>)), true)}
+                  {sez("Clienti nuovi", (ponte.nuovi_clienti||[]).length, (ponte.nuovi_clienti||[]).map(x=><div key={x.nome} style={{fontSize:11,padding:"2px 0"}}><b>{x.nome}</b> · {x.partita_iva||"senza P.IVA"} · categoria {x.categoria} · dalla {x.dalla}</div>))}
+                  {sez(ponte.prova?"Proforme che entreranno":"Proforme inserite", (ponte.inserite||[]).length, (ponte.inserite||[]).map(x=>riga(x,<span style={{minWidth:150,color:"var(--color-text-secondary)"}}>{x.una_tantum?`una tantum · scad. ${String(x.scadenza||"").split("-").reverse().join("/")}`:`${x.periodo} ${x.anno}`}{x.stato==="incassata"?" · già incassata":""}</span>)))}
+                  {sez("Collegate a righe già presenti", (ponte.collegate||[]).length, (ponte.collegate||[]).map(x=>riga(x,<span style={{minWidth:150,color:"var(--color-text-secondary)"}}>{x.periodo} {x.anno}</span>)))}
+                  {sez("Abbinati per nome simile — da controllare", (ponte.clienti_simili||[]).length, (ponte.clienti_simili||[]).map(x=><div key={x.numero} style={{fontSize:11,padding:"2px 0"}}>{x.staff} → <b>{x.ced}</b> <span style={{color:"var(--color-text-secondary)"}}>({x.numero})</span></div>))}
+                  {sez("Da decidere a mano — non portate", (ponte.da_decidere||[]).length, (ponte.da_decidere||[]).map(x=>riga(x,<span style={{flex:"1 1 100%",color:S.warnD}}>{x.motivo}</span>)), true)}
+                  {sez("Importi diversi fra Staff e CED (solo informazione)", (ponte.differenze||[]).length, (ponte.differenze||[]).map((x,i)=><div key={i} style={{fontSize:11,padding:"2px 0"}}>{x.numero} {x.cliente} · {x.periodo}: Staff {fmt(x.totale)}{x.importo_ced!==undefined?` · CED ${fmt(x.importo_ced)}`:""}{x.motivo?` · ${x.motivo}`:""}</div>))}
+                  <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap",alignItems:"center"}}>
+                    <button onClick={()=>allineaStaff(false)} disabled={ponteBusy} style={{padding:"7px 14px",background:"transparent",border:`1px solid ${C.purple}`,color:C.purple,borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}>Ricalcola{sceltePendenti?` con ${sceltePendenti} scelte`:""}</button>
+                    {ponte.prova && daFare>0 && <button onClick={()=>allineaStaff(true)} disabled={ponteBusy||scelteCambiate} title={scelteCambiate?"Prima «Ricalcola»: il resoconto non tiene ancora conto delle tue ultime scelte":"Scrive nel CED quello che vedi qui sopra"} style={{padding:"7px 16px",background:scelteCambiate?C.grayL:C.purple,border:"none",color:"#fff",borderRadius:8,fontSize:12,fontWeight:600,cursor:scelteCambiate?"not-allowed":"pointer"}}>Applica</button>}
+                    {scelteCambiate && <span style={{fontSize:10,color:S.warnD}}>Hai cambiato delle scelte: premi «Ricalcola» per vederle nel resoconto prima di applicare.</span>}
+                  </div>
+                </div>);
+              })()}
 
               {sbReady() && (()=>{
                 const cats=[["focus","Focus (trim.)"],["altri","Altri (mensili)"],["ragazzi","Ragazzi"],["bilancio","Bilancio"],["nuovi","Nuovi"]];
